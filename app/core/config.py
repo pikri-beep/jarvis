@@ -57,6 +57,9 @@ class Settings:
     )
 
     # Local LLM Runtime (Ollama)
+    llm_enabled: bool = field(
+        default_factory=lambda: _get_bool("JARVIS_LLM_ENABLED", False)
+    )
     ollama_url: str = field(
         default_factory=lambda: os.getenv(
             "JARVIS_OLLAMA_URL", "http://localhost:11434"

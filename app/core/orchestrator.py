@@ -40,6 +40,7 @@ class Orchestrator:
         self.wake_word = wake_word_client
         self.router = CommandRouter()
         self.state = SessionState(system_prompt=get_system_prompt())
+        self._explicit_llm = llm_client is not None
 
     def get_stt(self) -> SpeechToText:
         """Returns the active Speech-to-Text instance (lazy-loaded)."""
@@ -223,6 +224,12 @@ class Orchestrator:
                         "Aplikasi apa yang ingin Anda tutup, sir?"
                         if is_id
                         else "Which application would you like me to close, sir?"
+                    )
+                elif route.action == "clarify_type":
+                    out = (
+                        "Teks apa yang ingin Anda ketik, sir?"
+                        if is_id
+                        else "What text would you like me to type, sir?"
                     )
                 else:
                     out = (
@@ -735,6 +742,184 @@ class Orchestrator:
                     reply_chunks.append(msg)
                     yield msg
 
+                elif route.action == "focus_app":
+                    from app.tools.desktop import focus_application
+                    app_t = route.args.get("target", "") or target
+                    ok, msg = focus_application(app_t, language=effective_lang)
+                    self.state.set_last_action("focus_app", app_t, app_t, ok)
+                    logger.info('[TOOL] name="focus_app" target="%s" status="%s"', app_t, "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "open_new_tab":
+                    from app.tools.browser import open_new_tab
+                    ok, msg = open_new_tab(language=effective_lang)
+                    self.state.set_last_action("open_new_tab", "tab", "Browser Tab", ok)
+                    logger.info('[TOOL] name="open_new_tab" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "close_tab":
+                    from app.tools.browser import close_tab
+                    ok, msg = close_tab(language=effective_lang)
+                    self.state.set_last_action("close_tab", "tab", "Browser Tab", ok)
+                    logger.info('[TOOL] name="close_tab" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "refresh_page":
+                    from app.tools.browser import refresh_page
+                    ok, msg = refresh_page(language=effective_lang)
+                    self.state.set_last_action("refresh_page", "page", "Browser Page", ok)
+                    logger.info('[TOOL] name="refresh_page" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "navigate_back":
+                    from app.tools.browser import navigate_back
+                    ok, msg = navigate_back(language=effective_lang)
+                    self.state.set_last_action("navigate_back", "history", "Browser History", ok)
+                    logger.info('[TOOL] name="navigate_back" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "navigate_forward":
+                    from app.tools.browser import navigate_forward
+                    ok, msg = navigate_forward(language=effective_lang)
+                    self.state.set_last_action("navigate_forward", "history", "Browser History", ok)
+                    logger.info('[TOOL] name="navigate_forward" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "focus_address_bar":
+                    from app.tools.browser import focus_address_bar
+                    ok, msg = focus_address_bar(language=effective_lang)
+                    self.state.set_last_action("focus_address_bar", "address_bar", "Address Bar", ok)
+                    logger.info('[TOOL] name="focus_address_bar" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "click_search_field":
+                    from app.tools.desktop import click_search_field
+                    ok, msg = click_search_field(language=effective_lang)
+                    self.state.set_last_action("click_search_field", "search_field", "Search Field", ok)
+                    logger.info('[TOOL] name="click_search_field" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "move_cursor_center":
+                    from app.tools.desktop import move_cursor_to_center
+                    ok, msg = move_cursor_to_center(language=effective_lang)
+                    self.state.set_last_action("move_cursor_center", "center", "Mouse", ok)
+                    logger.info('[TOOL] name="move_cursor_center" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "mouse_click_left":
+                    from app.tools.desktop import mouse_click
+                    ok, msg = mouse_click(button="left", double=False, language=effective_lang)
+                    self.state.set_last_action("mouse_click", "left", "Mouse Click", ok)
+                    logger.info('[TOOL] name="mouse_click_left" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "mouse_click_right":
+                    from app.tools.desktop import mouse_click
+                    ok, msg = mouse_click(button="right", double=False, language=effective_lang)
+                    self.state.set_last_action("mouse_click", "right", "Mouse Click", ok)
+                    logger.info('[TOOL] name="mouse_click_right" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "mouse_click_double":
+                    from app.tools.desktop import mouse_click
+                    ok, msg = mouse_click(button="left", double=True, language=effective_lang)
+                    self.state.set_last_action("mouse_click", "double", "Mouse Click", ok)
+                    logger.info('[TOOL] name="mouse_click_double" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "mouse_scroll_down":
+                    from app.tools.desktop import mouse_scroll
+                    ok, msg = mouse_scroll(direction="down", amount=5, language=effective_lang)
+                    self.state.set_last_action("mouse_scroll", "down", "Mouse Scroll", ok)
+                    logger.info('[TOOL] name="mouse_scroll_down" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "mouse_scroll_up":
+                    from app.tools.desktop import mouse_scroll
+                    ok, msg = mouse_scroll(direction="up", amount=5, language=effective_lang)
+                    self.state.set_last_action("mouse_scroll", "up", "Mouse Scroll", ok)
+                    logger.info('[TOOL] name="mouse_scroll_up" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "type_text":
+                    from app.tools.desktop import type_text
+                    txt = route.args.get("text", "")
+                    ok, msg = type_text(txt, language=effective_lang)
+                    self.state.set_last_action("type_text", txt, "Desktop Typing", ok)
+                    logger.info('[TOOL] name="type_text" len=%d status="%s"', len(txt), "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "press_key":
+                    from app.tools.desktop import press_single_key
+                    k = route.args.get("key", "enter")
+                    ok, msg = press_single_key(k, language=effective_lang)
+                    self.state.set_last_action("press_key", k, "Key Press", ok)
+                    logger.info('[TOOL] name="press_key" key="%s" status="%s"', k, "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "send_hotkey":
+                    from app.tools.desktop import send_shortcut
+                    combo = route.args.get("combo", "")
+                    ok, msg = send_shortcut(combo, language=effective_lang)
+                    self.state.set_last_action("send_hotkey", combo, "Shortcut", ok)
+                    logger.info('[TOOL] name="send_hotkey" combo="%s" status="%s"', combo, "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "request_confirmation":
+                    act_name = route.args.get("intended_action", "Tindakan")
+                    out = (
+                        f"Tindakan '{act_name}' memerlukan konfirmasi karena berisiko menghapus data atau mengubah konfigurasi sistem. Apakah Anda ingin melanjutkan, sir?"
+                        if is_id
+                        else f"Action '{act_name}' requires confirmation as it can delete data or modify system settings. Do you want to proceed, sir?"
+                    )
+                    self.state.set_last_action("request_confirmation", act_name, "Confirmation", False)
+                    logger.info('[TOOL] name="request_confirmation" action="%s"', act_name)
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "cancel_action":
+                    out = "Baik sir, tindakan dibatalkan." if is_id else "Understood sir, action cancelled."
+                    self.state.set_last_action("cancel_action", "cancel", "Cancel", True)
+                    logger.info('[TOOL] name="cancel_action"')
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "capability_inquiry":
+                    out = (
+                        "Saya dapat membuka aplikasi, membuka website, mengontrol tab dan browser, menggerakkan kursor, mengetik teks, dan membaca layar Windows, sir."
+                        if is_id
+                        else "I can open applications, websites, control browser tabs, move mouse, type text, and inspect your Windows screen, sir."
+                    )
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "unsupported_command":
+                    out = (
+                        "Perintah tidak dikenali, sir. Sebutkan tindakan seperti buka aplikasi, kontrol browser, ketik teks, atau baca layar."
+                        if is_id
+                        else "Command not recognized, sir. Please state an action such as opening an application, browser control, or reading the screen."
+                    )
+                    logger.info('[TOOL] name="unsupported_command"')
+                    reply_chunks.append(out)
+                    yield out
+
                 else:
                     out = f"Menjalankan perintah {route.action}, sir." if is_id else f"Executing {route.action}, sir."
                     logger.info('[TOOL] name="%s" status="SUCCESS"', route.action)
@@ -763,8 +948,8 @@ class Orchestrator:
                     window_title=res.window_title,
                     text=res.text,
                     method=res.method,
-                    spoken=res.spoken_summary,
-                    display=res.display_text,
+                    spoken_summary=res.spoken_summary,
+                    display_text=res.display_text,
                 )
                 self.state.set_last_action("read_screen", res.window_title, "Screen Reader", res.success)
                 logger.info(
@@ -846,7 +1031,23 @@ class Orchestrator:
 
             return route, _web_query_gen()
 
-        # 4. Handle AI reasoning request (routed to local LLM)
+        # 6. Handle AI reasoning request (routed to local LLM)
+        is_mock_llm = self.llm is not None and not isinstance(self.llm, OllamaClient)
+        if not self.settings.llm_enabled and not self._explicit_llm and not is_mock_llm:
+            def _no_llm_gen():
+                if any(w in user_input.lower() for w in ["jangan", "don't", "do not", "tidak usah", "batal"]):
+                    msg = "Baik sir, tindakan dibatalkan." if is_id else "Understood sir, action cancelled."
+                else:
+                    msg = (
+                        "Mode asisten desktop aktif. Eksekusi LLM dinonaktifkan untuk menghemat daya dan menjaga latensi tetap instan, sir."
+                        if is_id
+                        else "Desktop assistant mode is active. LLM execution is offline to conserve resources and keep latency instant, sir."
+                    )
+                self.state.add_turn(user_input, msg)
+                yield msg
+
+            return route, _no_llm_gen()
+
         from app.memory.memory import get_relevant_memories_prompt
         mem_prompt = get_relevant_memories_prompt(language=effective_lang)
         self.state.system_prompt = get_system_prompt(language=effective_lang) + mem_prompt

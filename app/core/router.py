@@ -215,7 +215,8 @@ class CommandRouter:
         (r"^(?:(?:lihat|cek|periksa|baca|inspeksi)\s+layar(?:\s+(?:gue|saya|ku|ini))?|(?:look\s+at|inspect)\s+(?:my\s+)?screen)$", "read_screen", False),
         (r"^(?:baca\s+(?:teks|tulisan)?\s*(?:di|pada)\s+layar|read\s+(?:the\s+)?(?:text\s+on\s+)?screen)$", "read_screen", False),
         (r"^(?:what(?:'s|\s+is)\s+on\s+(?:my\s+)?screen|apa\s+yang\s+ada\s+di\s+layar)$", "read_screen", False),
-        (r"^(?:jelaskan\s+error(?:\s+(?:yang\s+tampil|di\s+layar))?|apa\s+error(?:\s+di\s+layar)?|explain\s+(?:the\s+)?error(?:\s+on\s+screen)?)$", "read_screen", True),
+        (r"^(?:apa\s+(?:tulisan|isi)\s+(?:di|pada)\s+jendela\s+ini|what\s+is\s+(?:written\s+)?(?:on|in)\s+this\s+window)$", "read_screen", False),
+        (r"^(?:baca\s+(?:pesan\s+)?error(?:\s+(?:yang\s+muncul|di\s+layar))?|jelaskan\s+error(?:\s+(?:yang\s+tampil|di\s+layar))?|apa\s+error(?:\s+di\s+layar)?|explain\s+(?:the\s+)?error(?:\s+on\s+screen)?|read\s+(?:the\s+)?error\s+message)$", "read_screen", True),
     ]
 
     # Search follow-up patterns
@@ -224,7 +225,7 @@ class CommandRouter:
         (r"^(?:sebutkan\s+sumbernya|apa\s+sumbernya|tampilkan\s+sumber(?:nya)?|list\s+(?:the\s+)?sources|what\s+are\s+the\s+sources|show\s+sources|sumbernya\s+apa)$", "list_search_sources", {}),
     ]
 
-    # Deterministic system patterns (time, date, battery, screenshot, lock, volume, media)
+    # Deterministic system patterns (time, date, battery, screenshot, lock, volume, media, desktop, browser)
     _SYSTEM_PATTERNS = [
         # System Time & Date
         (
@@ -245,7 +246,7 @@ class CommandRouter:
         (r"^(?:system\s+(?:info|information|specs|status)|pc\s+info|info\s+sistem)$", "system_info"),
         (r"^(?:battery(?:\s+status|\s+level|\s+percentage)?|power\s+status|status\s+baterai)$", "battery_status"),
         # Screen & Audio control
-        (r"^(?:(?:take|capture)\s+(?:a\s+)?screenshot|(?:ambil\s+)?tangkapan\s+layar|screenshot)$", "take_screenshot"),
+        (r"^(?:(?:take|capture|ambil)\s+(?:a\s+)?(?:screenshot|tangkapan\s+layar)|screenshot|tangkapan\s+layar)$", "take_screenshot"),
         (r"^(?:(?:increase|raise|turn up)\s+(?:the\s+)?volume|(?:naikkan|besarkan)\s+volume)$", "volume_up"),
         (r"^(?:(?:decrease|lower|turn down)\s+(?:the\s+)?volume|(?:turunkan|kecilkan)\s+volume)$", "volume_down"),
         (r"^(?:(?:mute|unmute)\s+(?:the\s+)?(?:volume|sound|audio)|senyap(?:kan)?)$", "toggle_mute"),
@@ -255,6 +256,21 @@ class CommandRouter:
         (r"^(?:next(?:\s+track|\s+song)?|skip(?:\s+track|\s+song)?|lagu\s+berikutnya|lagu\s+selanjutnya|trek\s+berikutnya)$", "media_next"),
         (r"^(?:previous(?:\s+track|\s+song)?|prev(?:\s+track|\s+song)?|lagu\s+sebelumnya|trek\s+sebelumnya)$", "media_previous"),
         (r"^(?:stop\s+music|hentikan\s+musik)$", "media_stop"),
+        # Browser Tab & Navigation Control
+        (r"^(?:(?:buka\s+)?tab\s+baru|open\s+(?:a\s+)?new\s+tab|new\s+tab)$", "open_new_tab"),
+        (r"^(?:tutup\s+tab(?:\s+ini)?|close\s+(?:this\s+)?tab)$", "close_tab"),
+        (r"^(?:kembali(?:\s+ke\s+halaman\s+sebelumnya)?|halaman\s+sebelumnya|go\s+back|back)$", "navigate_back"),
+        (r"^(?:maju(?:\s+ke\s+halaman\s+berikutnya)?|halaman\s+berikutnya|go\s+forward|forward)$", "navigate_forward"),
+        (r"^(?:refresh(?:\s+halaman)?|muat\s+ulang(?:\s+halaman)?|reload(?:\s+page)?|refresh)$", "refresh_page"),
+        (r"^(?:fokus(?:\s+ke)?\s+kolom\s+alamat|focus\s+(?:the\s+)?address\s+bar)$", "focus_address_bar"),
+        (r"^(?:klik\s+(?:pada\s+)?(?:kolom|kotak)\s+pencarian|fokus(?:\s+ke)?\s+(?:kolom|kotak)\s+pencarian|click\s+(?:the\s+)?search\s+(?:field|box|bar)|search\s+(?:field|box)\s+click)$", "click_search_field"),
+        # Desktop Mouse & Cursor Control
+        (r"^(?:(?:gerakkan|pindahkan)\s+(?:kursor|mouse)\s+ke\s+tengah(?:\s+layar)?|move\s+(?:the\s+)?(?:cursor|mouse)\s+to\s+(?:the\s+)?center(?:\s+of\s+(?:the\s+)?screen)?)$", "move_cursor_center"),
+        (r"^(?:klik\s+kanan|right\s+click)$", "mouse_click_right"),
+        (r"^(?:double\s+click|klik\s+(?:dua|2)\s+kali|klik\s+ganda)$", "mouse_click_double"),
+        (r"^(?:klik|click)$", "mouse_click_left"),
+        (r"^(?:scroll\s+ke\s+bawah|scroll\s+down|gulir\s+ke\s+bawah)$", "mouse_scroll_down"),
+        (r"^(?:scroll\s+ke\s+atas|scroll\s+up|gulir\s+ke\s+atas)$", "mouse_scroll_up"),
         # Memory recall
         (r"^(?:apa\s+yang\s+(?:kamu|anda)\s+ingat(?:\s+tentang\s+saya)?|what\s+do\s+you\s+remember(?:\s+about\s+me)?)$", "recall_memories"),
     ]
@@ -507,6 +523,90 @@ class CommandRouter:
                         description=f"Fast command: play_music ({song_query})",
                     )
 
+            # Check Destructive operations requiring explicit confirmation
+            destr_match = re.match(
+                r"^(?:hapus\s+(?:folder|direktori|file|berkas|dokumen)|delete\s+(?:folder|directory|file|documents)|format\s+(?:c|d|disk|drive|penyimpanan)|kosongkan\s+recycle\s+bin|empty\s+recycle\s+bin|shutdown|matikan\s+komputer|restart\s+komputer|reboot)(?:\s+(.*))?$",
+                normalized,
+            )
+            if destr_match:
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action="request_confirmation",
+                    args={"intended_action": cleaned, "target": destr_match.group(1) or ""},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description="Destructive action requiring confirmation",
+                )
+
+            # Check Desktop Input: Typing text (e.g. "ketik hello world", "type search query")
+            type_match = re.match(r"^(?:ketik(?:kan)?|type)\s+(.+)$", normalized)
+            if type_match:
+                t_arg = type_match.group(1).strip()
+                t_arg = re.sub(r'^[«»"\'“”‘’]+|[«»"\'“”‘’]+$', '', t_arg).strip()
+                if t_arg:
+                    return RouteResult(
+                        route_type=RouteType.FAST_COMMAND,
+                        action="type_text",
+                        args={"text": t_arg},
+                        raw_input=cleaned,
+                        normalized_input=normalized,
+                        description=f"Desktop input: type_text ({t_arg})",
+                    )
+
+            if normalized in ("ketik", "type"):
+                return RouteResult(
+                    route_type=RouteType.CLARIFY,
+                    action="clarify_type",
+                    args={"raw_input": cleaned},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description="Ambiguous type command: text required",
+                )
+
+            # Check Desktop Input: Key press and shortcuts (e.g. "tekan enter", "press escape", "tekan ctrl+l")
+            press_match = re.match(r"^(?:tekan|press)\s+(?:tombol\s+|key\s+)?([a-z0-9\+\s]+)$", normalized)
+            if press_match:
+                raw_k = press_match.group(1).strip().replace(" ", "")
+                if "+" in raw_k:
+                    return RouteResult(
+                        route_type=RouteType.FAST_COMMAND,
+                        action="send_hotkey",
+                        args={"combo": raw_k},
+                        raw_input=cleaned,
+                        normalized_input=normalized,
+                        description=f"Desktop input: send_hotkey ({raw_k})",
+                    )
+                else:
+                    norm_k = "escape" if raw_k in ("esc", "escape") else ("enter" if raw_k in ("enter", "return") else raw_k)
+                    return RouteResult(
+                        route_type=RouteType.FAST_COMMAND,
+                        action="press_key",
+                        args={"key": norm_k},
+                        raw_input=cleaned,
+                        normalized_input=normalized,
+                        description=f"Desktop input: press_key ({norm_k})",
+                    )
+
+            # Check Application Switch / Focus (e.g. "switch ke Chrome", "pindah ke Notepad", "fokus ke Calculator", "focus on Chrome")
+            switch_match = re.match(
+                r"^(?:switch|pindah|fokus)(?:\s+(?:ke|pada|to))?\s+(.+)$|^(?:focus\s+(?:on|to)?)\s*(.+)$",
+                normalized,
+            )
+            if switch_match:
+                raw_sw = switch_match.group(1) or switch_match.group(2)
+                c_target = clean_target_identifier(raw_sw)
+                if c_target:
+                    from app.tools.apps import normalize_app_name
+                    canonical_app = normalize_app_name(c_target)
+                    return RouteResult(
+                        route_type=RouteType.FAST_COMMAND,
+                        action="focus_app",
+                        args={"target": canonical_app, "raw_target": raw_sw.strip()},
+                        raw_input=cleaned,
+                        normalized_input=normalized,
+                        description=f"Desktop control: focus_app ({canonical_app})",
+                    )
+
             # Check Open Standard Folder command (e.g. "buka folder downloads", "buka unduhan")
             folder_match = re.match(r"^(?:open|buka)\s+(?:folder|direktori|directory)\s*(.+)$", normalized)
             if folder_match:
@@ -519,7 +619,6 @@ class CommandRouter:
                     normalized_input=normalized,
                     description=f"Fast command: open_folder ({fname})",
                 )
-
 
             # Check Application and Website Launch:
             # Matches: open, launch, start, run, buka, jalankan, nyalakan
@@ -643,7 +742,7 @@ class CommandRouter:
                     description="Web-dependent query requiring current data",
                 )
 
-        # 4. Default: AI Request (handled by local LLM)
+        # 4. Default: AI Request (handled by local LLM if enabled, or offline notice in desktop mode)
         return RouteResult(
             route_type=RouteType.AI_REQUEST,
             action="llm_chat",
@@ -651,4 +750,6 @@ class CommandRouter:
             raw_input=cleaned,
             normalized_input=normalized,
             description="AI reasoning request",
+            confidence=0.5,
         )
+

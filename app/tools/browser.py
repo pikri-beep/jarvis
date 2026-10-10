@@ -225,3 +225,58 @@ def launch_website(raw_target: str) -> Tuple[bool, str, str, str]:
     except Exception as e:
         logger.error("Error launching website '%s' (%s): %s", display_name, target_url, e)
         return False, display_name, target_url, f"Gagal membuka {display_name}: {e}"
+
+
+def open_new_tab(language: str = "id") -> Tuple[bool, str]:
+    """Opens a new browser tab via Ctrl+T shortcut."""
+    from app.tools.desktop import send_shortcut
+    ok, _ = send_shortcut("ctrl+t", language=language)
+    is_id = language.lower().startswith("id")
+    msg = "Tab baru telah dibuka di browser, sir." if is_id else "New tab opened in browser, sir."
+    return ok, msg if ok else ("Gagal membuka tab baru." if is_id else "Failed to open new tab.")
+
+
+def close_tab(language: str = "id") -> Tuple[bool, str]:
+    """Closes the current browser tab via Ctrl+W shortcut."""
+    from app.tools.desktop import send_shortcut
+    ok, _ = send_shortcut("ctrl+w", language=language)
+    is_id = language.lower().startswith("id")
+    msg = "Tab saat ini telah ditutup, sir." if is_id else "Current tab closed, sir."
+    return ok, msg if ok else ("Gagal menutup tab." if is_id else "Failed to close tab.")
+
+
+def refresh_page(language: str = "id") -> Tuple[bool, str]:
+    """Reloads the active browser page via Ctrl+R shortcut."""
+    from app.tools.desktop import send_shortcut
+    ok, _ = send_shortcut("ctrl+r", language=language)
+    is_id = language.lower().startswith("id")
+    msg = "Halaman browser telah dimuat ulang, sir." if is_id else "Page reloaded, sir."
+    return ok, msg if ok else ("Gagal memuat ulang halaman." if is_id else "Failed to refresh page.")
+
+
+def navigate_back(language: str = "id") -> Tuple[bool, str]:
+    """Navigates back to the previous page via Alt+Left shortcut."""
+    from app.tools.desktop import send_shortcut
+    ok, _ = send_shortcut("alt+left", language=language)
+    is_id = language.lower().startswith("id")
+    msg = "Kembali ke halaman sebelumnya, sir." if is_id else "Navigated back, sir."
+    return ok, msg if ok else ("Gagal kembali ke halaman sebelumnya." if is_id else "Failed to go back.")
+
+
+def navigate_forward(language: str = "id") -> Tuple[bool, str]:
+    """Navigates forward to the next page via Alt+Right shortcut."""
+    from app.tools.desktop import send_shortcut
+    ok, _ = send_shortcut("alt+right", language=language)
+    is_id = language.lower().startswith("id")
+    msg = "Maju ke halaman berikutnya, sir." if is_id else "Navigated forward, sir."
+    return ok, msg if ok else ("Gagal maju ke halaman berikutnya." if is_id else "Failed to go forward.")
+
+
+def focus_address_bar(language: str = "id") -> Tuple[bool, str]:
+    """Focuses the browser address bar via Ctrl+L shortcut."""
+    from app.tools.desktop import send_shortcut
+    ok, _ = send_shortcut("ctrl+l", language=language)
+    is_id = language.lower().startswith("id")
+    msg = "Kolom alamat browser telah difokuskan, sir." if is_id else "Address bar focused, sir."
+    return ok, msg if ok else ("Gagal memfokuskan kolom alamat." if is_id else "Failed to focus address bar.")
+

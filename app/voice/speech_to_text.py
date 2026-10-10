@@ -15,10 +15,21 @@ logger = setup_logger("jarvis.voice.stt")
 
 DEFAULT_INITIAL_PROMPT = (
     "Halo JARVIS. Tolong buka Chrome, Google Chrome, YouTube, Open YouTube, Buka YouTube, "
-    "Instagram, Buka Instagram, WhatsApp, Notepad, Edge, Kalkulator, Pengaturan, Berkas. "
+    "Instagram, Buka Instagram, WhatsApp, Notepad, Edge, Kalkulator, Pengaturan, Berkas, File Explorer. "
+    "Buka tab baru, tutup tab, kembali, refresh halaman, klik kolom pencarian, ketik, tekan enter, "
+    "gerakkan kursor ke tengah layar, klik, klik kanan, scroll ke bawah, scroll ke atas, lihat layar gue. "
     "Jam berapa sekarang? Sekarang jam berapa? Pukul berapa sekarang? Tanggal berapa hari ini? Hari apa sekarang? Waktu sekarang. "
-    "RAM, SSD, jadwal hari ini. Open Chrome, WhatsApp, Settings, What time is it."
+    "RAM, SSD, info sistem. Open Chrome, WhatsApp, Settings, What time is it, Take screenshot."
 )
+
+WHISPER_HALLUCINATIONS = {
+    "terima kasih", "terima kasih.", "terima kasih banyak", "terima kasih banyak.",
+    "terima kasih telah menonton", "terima kasih telah menonton.",
+    "thank you", "thank you.", "thank you very much", "thank you very much.",
+    "thanks for watching", "thanks for watching.",
+    "subtitles by", "subtitles by amara.org",
+    "you", "you.", "bye", "bye.", "...", "[music]", "(music)",
+}
 
 
 class SpeechToText:
@@ -156,6 +167,13 @@ class SpeechToText:
 
         texts = [s.text.strip() for s in segments if s.text.strip()]
         transcription = " ".join(texts).strip()
+
+        # Filter out known Whisper hallucination phrases produced during near-silence
+        clean_cand = transcription.strip().lower()
+        if clean_cand in WHISPER_HALLUCINATIONS or clean_cand.rstrip(".") in WHISPER_HALLUCINATIONS:
+            logger.info("[STT] Filtered out Whisper silence hallucination: %r", transcription)
+            transcription = ""
+
         elapsed = time.time() - t0
         final_lang = detected_lang or getattr(info, "language", "id")
 

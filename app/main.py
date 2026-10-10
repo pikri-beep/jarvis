@@ -45,9 +45,15 @@ logger = setup_logger("jarvis.main", log_to_console=False)
 
 def print_banner(orchestrator: Orchestrator, wake_active: bool, ptt_active: bool) -> None:
     """Displays startup welcome banner and system diagnostics."""
-    status = orchestrator.get_system_status()
-    ollama_status = "Connected" if status["ollama_connected"] else "Offline"
-    model_status = "Available" if status["model_ready"] else "Not Found"
+    llm_enabled = orchestrator.settings.llm_enabled
+    if llm_enabled:
+        ollama_status = "Connected" if status["ollama_connected"] else "Offline"
+        model_status = "Available" if status["model_ready"] else "Not Found"
+        model_display = f"{status['model']} [{model_status}]"
+        ollama_display = f"{status['ollama_url']} [{ollama_status}]"
+    else:
+        model_display = "Desktop Automation Engine [Deterministic Zero-LLM Routing]"
+        ollama_display = "Disabled / Isolated (Routine Actions Bypassed)"
     
     wake_status = (
         f"Active [Model: {status.get('wake_word_model', 'hey_jarvis_v0.1.onnx')} | Trigger: 'Hey Jarvis']"
@@ -60,20 +66,21 @@ def print_banner(orchestrator: Orchestrator, wake_active: bool, ptt_active: bool
     print("=" * 66)
     print(f"        {status['name'].upper()} - Local AI Personal Assistant")
     print("=" * 66)
-    print(f" Model:         {status['model']} [{model_status}]")
-    print(f" Ollama:        {status['ollama_url']} [{ollama_status}]")
+    print(f" Engine:        {model_display}")
+    print(f" LLM Status:    {ollama_display}")
     print(f" Wake Word:     {wake_status}")
     print(f" Voice (PTT):   {voice_status}")
     print(f" Speech (TTS):  {tts_status}")
     print(" Commands:      '/wake' wake word | '/ptt' voice | '/tts' audio | '/exit' quit")
     print("-" * 66)
 
-    if not status["ollama_connected"]:
-        print("\n[WARNING] Could not connect to local Ollama server.")
-        print("Please start Ollama using 'ollama serve' or the Windows app.\n")
-    elif not status["model_ready"]:
-        print(f"\n[WARNING] Model '{status['model']}' not found in Ollama.")
-        print(f"Please run 'ollama pull {status['model']}' to install it.\n")
+    if llm_enabled:
+        if not status["ollama_connected"]:
+            print("\n[WARNING] Could not connect to local Ollama server.")
+            print("Please start Ollama using 'ollama serve' or the Windows app.\n")
+        elif not status["model_ready"]:
+            print(f"\n[WARNING] Model '{status['model']}' not found in Ollama.")
+            print(f"Please run 'ollama pull {status['model']}' to install it.\n")
 
 
 def execute_turn(
@@ -216,16 +223,17 @@ def run_repl(
 
     _print_prompt()
 
-    while orchestrator.state.is_running and not stop_event.is_set():
-        try:
+    try:
+        while orchestrator.state.is_running and not stop_event.is_set():
             try:
-                event_type, event_data = event_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
+                try:
+                    event_type, event_data = event_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
 
-            if event_type == "eof":
-                print("\n\nExiting JARVIS. Goodbye, sir.")
-                break
+                if event_type == "eof":
+                    print("\n\nExiting JARVIS. Goodbye, sir.")
+                    break
 
             # EVENT A: VOICE COMMAND (Captured via Always-Listening Wake Word)
             if event_type == "voice":
@@ -257,6 +265,8 @@ def run_repl(
 
                 metrics = {"rec_duration": duration_s, "stt_time": stt_time}
                 try:
+                    if wake_detector and mode == "wake":
+                        wake_detector.set_state(WakeWordState.SPEAKING)
                     should_continue = execute_turn(orchestrator, transcription, voice_metrics=metrics)
                 finally:
                     # Guarantee resume of wake-word detection after spoken response completes or on error
@@ -384,11 +394,16 @@ def run_repl(
                 wake_detector.resume()
             _print_prompt()
             continue
-
-    # Cleanup upon exit
-    stop_event.set()
-    if wake_detector:
-        wake_detector.cleanup()
+    finally:
+        # Guaranteed cleanup upon exit or any exception
+        stop_event.set()
+        if recorder and getattr(recorder, "is_recording", False):
+            try:
+                recorder.stop_recording()
+            except Exception:
+                pass
+        if wake_detector:
+            wake_detector.cleanup()
 
 
 def run_single_query(orchestrator: Orchestrator, query: str) -> None:
