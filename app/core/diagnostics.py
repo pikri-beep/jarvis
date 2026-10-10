@@ -40,6 +40,13 @@ def generate_diagnostics_report(orchestrator: Any) -> Dict[str, Any]:
     tts = orchestrator.get_tts() if settings.tts_enabled else None
     stt = orchestrator.get_stt() if (settings.voice_enabled or settings.wake_word_enabled) else None
 
+    # Search-First & Screen Vision status
+    last_search = orchestrator.state.get_last_search()
+    last_screen = orchestrator.state.get_last_screen()
+    
+    from app.tools.screen_reader import check_vision_model_available
+    has_vision, vision_model, vision_info = check_vision_model_available(settings.ollama_url)
+
     return {
         "platform": {
             "os": f"{platform.system()} {platform.release()} ({platform.version()})",
@@ -60,6 +67,21 @@ def generate_diagnostics_report(orchestrator: Any) -> Dict[str, Any]:
             "tts_model_en": settings.tts_model_en,
             "tts_loaded_voices": list(tts._voices.keys()) if tts else [],
         },
+        "search_first": {
+            "provider": "Bing Web Search (Primary) + Wikipedia OpenSearch (Fallback)",
+            "llm_bypassed": True,
+            "last_query": last_search.get("query", "None"),
+            "results_count": len(last_search.get("sources", [])),
+            "sources": [s.get("domain", "") for s in last_search.get("sources", []) if s.get("domain")],
+        },
+        "screen_vision": {
+            "ocr_engine": "Windows 11 Native WinRT (Windows.Media.Ocr.OcrEngine)",
+            "ui_automation": "Active (Desktop Window Hierarchy)",
+            "vision_model_available": has_vision,
+            "vision_model": vision_model or "None (auto-download prevented)",
+            "last_window": last_screen.get("window_title", "None"),
+            "last_method": last_screen.get("method", "None"),
+        },
         "ai_orchestrator": {
             "ollama_url": settings.ollama_url,
             "model": settings.model,
@@ -67,11 +89,12 @@ def generate_diagnostics_report(orchestrator: Any) -> Dict[str, Any]:
             "model_ready": model_available,
             "conversation_language": orchestrator.state.conversation_language,
             "recent_turns_count": len(orchestrator.state.history),
+            "last_action": orchestrator.state.last_action_context.get("action", "None"),
         },
         "tools_and_agents": {
             "chrome_installed": bool(chrome_path),
             "chrome_path": str(chrome_path) if chrome_path else "Not found",
-            "web_search_agent": "Active (Wikipedia & Clean Web Scraper)",
+            "web_search_agent": "Active (Extractive 1-2 sentence search)",
             "music_controller": "Active (Windows Media Keys & YouTube/Spotify)",
             "desktop_automation": "Active (PowerShell Screen Capture & User32 Lock)",
             "stored_memories_count": len(memories),
@@ -85,6 +108,8 @@ def format_diagnostics_text(diag: Dict[str, Any]) -> str:
     v = diag["voice_pipeline"]
     a = diag["ai_orchestrator"]
     t = diag["tools_and_agents"]
+    sf = diag.get("search_first", {})
+    sv = diag.get("screen_vision", {})
 
     lines = [
         "=" * 66,
@@ -99,10 +124,20 @@ def format_diagnostics_text(diag: Dict[str, Any]) -> str:
         f"              TTS: ID={v['tts_model_id']} | EN={v['tts_model_en']}",
         f"              TTS Loaded Voices: {v['tts_loaded_voices']}",
         "-" * 66,
+        f" [Search-1st] Provider: {sf.get('provider', 'Bing Web Search')}",
+        f"              LLM Bypassed: {sf.get('llm_bypassed', True)} (Extractive 1-2 sentence)",
+        f"              Last Query: {sf.get('last_query', 'None')}",
+        f"              Sources Retrieved: {sf.get('results_count', 0)} ({', '.join(sf.get('sources', [])) or 'None'})",
+        "-" * 66,
+        f" [Screen/Vis] OCR: {sv.get('ocr_engine', 'Windows 11 WinRT OCR')}",
+        f"              UI Automation: {sv.get('ui_automation', 'Active')}",
+        f"              Vision Model: {sv.get('vision_model', 'None')}",
+        f"              Active Window: {sv.get('last_window', 'None')} (Method: {sv.get('last_method', 'None')})",
+        "-" * 66,
         f" [Local LLM]  Server: {a['ollama_url']} (Online: {a['ollama_online']})",
         f"              Model: {a['model']} (Ready: {a['model_ready']})",
         f"              Active Language: {a['conversation_language'].upper()}",
-        f"              Session Turns: {a['recent_turns_count']}",
+        f"              Session Turns: {a['recent_turns_count']} | Last Action: {a.get('last_action', 'None')}",
         "-" * 66,
         f" [Tools]      Chrome: {t['chrome_installed']} ({t['chrome_path']})",
         f"              Browser Agent: {t['web_search_agent']}",

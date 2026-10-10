@@ -16,6 +16,8 @@ class RouteType(Enum):
     FAST_COMMAND = auto()      # Fast system/tool actions (open app, lock, volume)
     CLARIFY = auto()           # Ambiguous command requiring user clarification
     WEB_DEPENDENT = auto()     # Needs real-time external info (weather, news)
+    WEB_SEARCH = auto()        # Dedicated Search-First web retrieval without LLM
+    SCREEN_READ = auto()       # On-demand screen reading and OCR
     AI_REQUEST = auto()        # General reasoning/knowledge handled by LLM
 
 
@@ -52,7 +54,7 @@ class RouteResult:
 
     @property
     def route(self) -> str:
-        """Returns standard route classification matching contract: DIRECT, LLM, CLARIFY, TERMINAL, WEB."""
+        """Returns standard route classification matching contract: DIRECT, LLM, CLARIFY, TERMINAL, WEB, SCREEN."""
         if self.route_type == RouteType.FAST_COMMAND:
             return "DIRECT"
         elif self.route_type == RouteType.AI_REQUEST:
@@ -61,8 +63,10 @@ class RouteResult:
             return "CLARIFY"
         elif self.route_type == RouteType.TERMINAL_COMMAND:
             return "TERMINAL"
-        elif self.route_type == RouteType.WEB_DEPENDENT:
+        elif self.route_type in (RouteType.WEB_SEARCH, RouteType.WEB_DEPENDENT):
             return "WEB"
+        elif self.route_type == RouteType.SCREEN_READ:
+            return "SCREEN"
         return "UNKNOWN"
 
     @property
@@ -149,6 +153,25 @@ def clean_target_identifier(raw_target: str) -> str:
     return t.strip()
 
 
+def clean_search_query_arg(q: str) -> str:
+    """Cleans extracted search query removing filler prepositions, particles, and quotes."""
+    if not q:
+        return ""
+    s = q.strip()
+    s = re.sub(r'^[«»"\'“”‘’]+|[«»"\'“”‘’]+$', '', s).strip()
+    s = re.sub(r'[\.\?!,;:]+$', '', s).strip()
+    # Strip leading prepositions/fillers that might have been captured
+    s = re.sub(
+        r'^(?:tentang|mengenai|soal|seputar|informasi\s+tentang|info\s+tentang|berita\s+tentang|berita\s+terbaru\s+tentang|for|about|on)\s+',
+        '',
+        s,
+        flags=re.IGNORECASE,
+    ).strip()
+    # Strip trailing courtesy words
+    s = re.sub(r'\s+(?:dong(?:\s+ya)?|ya(?:\s+dong)?|deh|lah|sih|nih|please|now)$', '', s, flags=re.IGNORECASE).strip()
+    return s.strip()
+
+
 class CommandRouter:
     """Routes user input to the optimal processing path."""
 
@@ -186,6 +209,20 @@ class CommandRouter:
         "reset": "reset_context",
         "/reset": "reset_context",
     }
+
+    # Screen reading patterns (on-demand inspection)
+    _SCREEN_PATTERNS = [
+        (r"^(?:(?:lihat|cek|periksa|baca|inspeksi)\s+layar(?:\s+(?:gue|saya|ku|ini))?|(?:look\s+at|inspect)\s+(?:my\s+)?screen)$", "read_screen", False),
+        (r"^(?:baca\s+(?:teks|tulisan)?\s*(?:di|pada)\s+layar|read\s+(?:the\s+)?(?:text\s+on\s+)?screen)$", "read_screen", False),
+        (r"^(?:what(?:'s|\s+is)\s+on\s+(?:my\s+)?screen|apa\s+yang\s+ada\s+di\s+layar)$", "read_screen", False),
+        (r"^(?:jelaskan\s+error(?:\s+(?:yang\s+tampil|di\s+layar))?|apa\s+error(?:\s+di\s+layar)?|explain\s+(?:the\s+)?error(?:\s+on\s+screen)?)$", "read_screen", True),
+    ]
+
+    # Search follow-up patterns
+    _SEARCH_FOLLOWUP_PATTERNS = [
+        (r"^(?:bacakan\s+hasilnya|bacakan\s+hasil|read\s+(?:the\s+)?result(?:s)?)$", "read_search_result", {}),
+        (r"^(?:sebutkan\s+sumbernya|apa\s+sumbernya|tampilkan\s+sumber(?:nya)?|list\s+(?:the\s+)?sources|what\s+are\s+the\s+sources|show\s+sources|sumbernya\s+apa)$", "list_search_sources", {}),
+    ]
 
     # Deterministic system patterns (time, date, battery, screenshot, lock, volume, media)
     _SYSTEM_PATTERNS = [
@@ -241,6 +278,83 @@ class CommandRouter:
         r"\b(?:apa\s+itu|siapa\s+itu|who\s+is|what\s+is\s+(?!today|the\s+date|the\s+time|time|current|the\s+day))\b",
     ]
 
+    def _match_search_query(self, text: str) -> Optional[Tuple[str, str, Dict[str, Any]]]:
+        """Matches deterministic web search requests in Indonesian and English."""
+        t = text.strip()
+
+        # 1. "buka hasil pencarian tentang X" / "open search results for X"
+        m_open = re.match(
+            r"^(?:buka\s+hasil\s+pencarian(?:\s+(?:tentang|mengenai|soal|seputar))?|open\s+search\s+results\s+(?:for|about))\s+(.+)$",
+            t,
+            re.IGNORECASE,
+        )
+        if m_open:
+            q = clean_search_query_arg(m_open.group(1))
+            return "open_search_results", q, {"query": q, "open_browser": True}
+
+        # 2. Indonesian search patterns
+        m_id = re.match(
+            r"^(?:cari(?:kan)?(?:\s+lah)?)\s+"
+            r"(?:"
+            r"(?:informasi|info|berita(?:\s+terbaru)?|kabar(?:\s+terkini|\s+terbaru)?|artikel|data)\s*(?:tentang|mengenai|soal|seputar)?\s*|"
+            r"(?:di\s+internet|di\s+web|di\s+google|di\s+bing)\s*(?:tentang|mengenai|soal|seputar)?\s*|"
+            r"(?:tentang|mengenai|soal|seputar)\s*"
+            r")?"
+            r"(.+)$",
+            t,
+            re.IGNORECASE,
+        )
+        if m_id:
+            raw_q = m_id.group(1).strip()
+            raw_q = re.sub(r"\s+(?:di\s+(?:internet|web|google|bing))$", "", raw_q, flags=re.IGNORECASE).strip()
+            q = clean_search_query_arg(raw_q)
+            if q and len(q) > 1 and q not in ("sesuatu", "apa saja", "dong"):
+                return "search_web", q, {"query": q}
+
+        # 3. English search patterns
+        m_en = re.match(
+            r"^(?:"
+            r"search\s+(?:the\s+web\s+for|on\s+the\s+web\s+for|online\s+for|google\s+for|bing\s+for|for)?\s*|"
+            r"find\s+(?:information\s+(?:about|on)|info\s+(?:about|on)|out\s+about)?\s*|"
+            r"look\s+up\s+(?:on\s+the\s+web\s+for|online\s+for|for)?\s*"
+            r")"
+            r"(.+)$",
+            t,
+            re.IGNORECASE,
+        )
+        if m_en:
+            raw_q = m_en.group(1).strip()
+            raw_q = re.sub(r"\s+(?:on\s+the\s+web|online|on\s+google)$", "", raw_q, flags=re.IGNORECASE).strip()
+            q = clean_search_query_arg(raw_q)
+            if q and len(q) > 1:
+                return "search_web", q, {"query": q}
+
+        # 4. "what are the latest developments in X" / "what is the latest news on X"
+        m_latest = re.match(
+            r"^(?:what\s+are\s+the\s+latest\s+developments\s+in|what(?:'s|\s+is)\s+the\s+latest\s+(?:news|update|information)\s+(?:on|about))\s+(.+)$",
+            t,
+            re.IGNORECASE,
+        )
+        if m_latest:
+            raw_q = m_latest.group(1).strip()
+            q = clean_search_query_arg(raw_q)
+            if q:
+                return "search_web", q, {"query": f"latest developments in {q}"}
+
+        # 5. "apa perkembangan terbaru tentang X" / "perkembangan terbaru seputar X"
+        m_perkembangan = re.match(
+            r"^(?:apa\s+perkembangan\s+terbaru\s+(?:tentang|mengenai|seputar)|perkembangan\s+terbaru\s+(?:tentang|mengenai|seputar))\s+(.+)$",
+            t,
+            re.IGNORECASE,
+        )
+        if m_perkembangan:
+            raw_q = m_perkembangan.group(1).strip()
+            q = clean_search_query_arg(raw_q)
+            if q:
+                return "search_web", q, {"query": f"perkembangan terbaru {q}"}
+
+        return None
+
     def route(self, user_input: str) -> RouteResult:
         """Determines the appropriate routing for the given user input."""
         cleaned = user_input.strip()
@@ -272,6 +386,65 @@ class CommandRouter:
 
         # Normalize input consistently
         normalized = normalize_command_text(cleaned)
+
+        # 1.5. On-Demand Screen Reading (Explicit user intent only)
+        for pattern, action, pref_vis in self._SCREEN_PATTERNS:
+            if re.search(pattern, normalized):
+                return RouteResult(
+                    route_type=RouteType.SCREEN_READ,
+                    action=action,
+                    args={"prompt": cleaned, "prefer_vision": pref_vis},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description=f"Screen inspection: {action} (vision={pref_vis})",
+                )
+
+        # 1.6. Search Follow-ups ("bacakan hasilnya", "sebutkan sumbernya", "buka sumber pertama")
+        for pattern, action, args_map in self._SEARCH_FOLLOWUP_PATTERNS:
+            if re.search(pattern, normalized):
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action=action,
+                    args=dict(args_map),
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description=f"Search followup: {action}",
+                )
+
+        m_src = re.match(
+            r"^(?:buka\s+sumber\s+(pertama|kedua|ketiga|ke-?1|ke-?2|ke-?3|1|2|3)|open\s+(?:the\s+)?(first|second|third|1st|2nd|3rd|source\s+1|source\s+2)\s*(?:source)?)$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if m_src:
+            w = m_src.group(1) or m_src.group(2)
+            idx_map = {
+                "pertama": 1, "ke-1": 1, "ke1": 1, "1": 1, "first": 1, "1st": 1, "source 1": 1,
+                "kedua": 2, "ke-2": 2, "ke2": 2, "2": 2, "second": 2, "2nd": 2, "source 2": 2,
+                "ketiga": 3, "ke-3": 3, "ke3": 3, "3": 3, "third": 3, "3rd": 3,
+            }
+            idx = idx_map.get(w.lower() if w else "", 1)
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="open_search_source",
+                args={"index": idx},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description=f"Open search source #{idx}",
+            )
+
+        # 1.7. Explicit Search-First Queries (Bypasses LLM deterministically)
+        search_intent = self._match_search_query(normalized)
+        if search_intent:
+            act, q_target, s_args = search_intent
+            return RouteResult(
+                route_type=RouteType.WEB_SEARCH,
+                action=act,
+                args=s_args,
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description=f"Search-First: {q_target}",
+            )
 
         # Check for conversational inquiry markers (questions, explanations, negations)
         is_conversational_inquiry = any(re.search(pat, lower) for pat in self._CONVERSATIONAL_MARKERS)
@@ -347,19 +520,6 @@ class CommandRouter:
                     description=f"Fast command: open_folder ({fname})",
                 )
 
-
-            # Check Web Search command (e.g. "cari berita tentang ai", "search python release")
-            search_match = re.match(r"^(?:cari(?:kan)?(?:\s+di\s+internet|\s+di\s+web|\s+di\s+google)?|search(?:\s+the\s+web|\s+online|\s+google)?)\s+(?:tentang\s+)?(.+)$", normalized)
-            if search_match:
-                q_target = search_match.group(1).strip()
-                return RouteResult(
-                    route_type=RouteType.WEB_DEPENDENT,
-                    action="search_web",
-                    args={"query": q_target},
-                    raw_input=cleaned,
-                    normalized_input=normalized,
-                    description=f"Web search: {q_target}",
-                )
 
             # Check Application and Website Launch:
             # Matches: open, launch, start, run, buka, jalankan, nyalakan

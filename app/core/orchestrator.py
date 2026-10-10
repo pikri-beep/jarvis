@@ -634,28 +634,76 @@ class Orchestrator:
                     yield out
 
                 elif route.action == "search_web":
-                    from app.tools.browser_agent import open_search_in_browser, summarize_topic
+                    from app.tools.browser_agent import answer_search_query, open_search_in_browser
                     query = route.args.get("query", "") or target
                     open_b = route.args.get("open_browser", False)
                     if open_b or not query:
                         open_search_in_browser(query or "berita terbaru")
                         out = f"Membuka pencarian '{query}' di Chrome, sir." if is_id else f"Opening search for '{query}' in Chrome, sir."
                     else:
-                        summary, src_url = summarize_topic(query, lang=effective_lang)
-                        if summary:
-                            if is_id:
-                                out = f"{summary}\nSumber: {src_url}" if src_url else summary
-                            else:
-                                out = f"{summary}\nSource: {src_url}" if src_url else summary
-                        else:
-                            open_search_in_browser(query)
-                            out = (
-                                f"Saya membuka hasil pencarian '{query}' di Chrome untuk Anda, sir."
-                                if is_id
-                                else f"I've opened the search results for '{query}' in Chrome, sir."
-                            )
+                        ans = answer_search_query(query, language=effective_lang)
+                        self.state.set_last_search(
+                            query=ans.query,
+                            spoken_answer=ans.spoken_answer,
+                            display_answer=ans.display_answer,
+                            sources=ans.sources,
+                        )
+                        out = ans.display_answer
                     self.state.set_last_action("search_web", query, "Web Search", True)
                     logger.info('[TOOL] name="search_web" query="%s" status="SUCCESS"', query)
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "read_search_result":
+                    last_search = self.state.get_last_search()
+                    spoken = last_search.get("spoken_answer")
+                    if spoken:
+                        out = spoken
+                    else:
+                        out = "Belum ada hasil pencarian sebelumnya untuk dibacakan, sir." if is_id else "There is no previous search result to read, sir."
+                    self.state.set_last_action("read_search_result", "search", "Search", bool(spoken))
+                    logger.info('[TOOL] name="read_search_result" status="%s"', "SUCCESS" if spoken else "FAILURE")
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "list_search_sources":
+                    last_search = self.state.get_last_search()
+                    sources = last_search.get("sources", [])
+                    if sources:
+                        domains = [s.get("domain", "") for s in sources if s.get("domain")]
+                        dom_str = ", ".join(domains[:3])
+                        spoken_lead = f"Sumber pencarian berasal dari {dom_str}, sir." if is_id else f"Search sources are from {dom_str}, sir."
+                        lines = [spoken_lead, "", "Sumber:" if is_id else "Sources:"]
+                        for i, s in enumerate(sources[:5], 1):
+                            lines.append(f"{i}. {s.get('title', 'Result')} - {s.get('url', '')}")
+                        out = "\n".join(lines)
+                    else:
+                        out = "Belum ada sumber pencarian sebelumnya yang tersimpan, sir." if is_id else "No search sources are stored in the current session, sir."
+                    self.state.set_last_action("list_search_sources", "search", "Search", bool(sources))
+                    logger.info('[TOOL] name="list_search_sources" status="%s"', "SUCCESS" if sources else "FAILURE")
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "open_search_source":
+                    from app.tools.browser import launch_website
+                    last_search = self.state.get_last_search()
+                    sources = last_search.get("sources", [])
+                    idx = route.args.get("index", 1) - 1
+                    if 0 <= idx < len(sources):
+                        target_url = sources[idx].get("url") or ""
+                        target_title = sources[idx].get("title", f"Sumber #{idx+1}")
+                        if target_url:
+                            ok, disp, final_url, msg = launch_website(target_url)
+                            if ok:
+                                out = f"Membuka sumber ke-{idx+1} ({target_title}) di browser, sir." if is_id else f"Opening source #{idx+1} ({target_title}) in your browser, sir."
+                            else:
+                                out = f"Gagal membuka tautan {target_url}, sir: {msg}" if is_id else f"Failed to open link {target_url}, sir: {msg}"
+                        else:
+                            out = f"Tautan untuk sumber ke-{idx+1} tidak valid, sir." if is_id else f"Link for source #{idx+1} is invalid, sir."
+                    else:
+                        out = f"Sumber ke-{idx+1} tidak ditemukan dalam riwayat pencarian terakhir, sir." if is_id else f"Source #{idx+1} not found in last search results, sir."
+                    self.state.set_last_action("open_search_source", str(idx+1), "Search Source", 0 <= idx < len(sources))
+                    logger.info('[TOOL] name="open_search_source" index=%d status="%s"', idx+1, "SUCCESS" if (0 <= idx < len(sources)) else "FAILURE")
                     reply_chunks.append(out)
                     yield out
 
@@ -699,30 +747,100 @@ class Orchestrator:
 
             return route, _fast_command_gen()
 
-        # 3. Handle Web-dependent requests
-        if route.route_type == RouteType.WEB_DEPENDENT:
-            def _web_query_gen():
-                from app.tools.browser_agent import open_search_in_browser, summarize_topic
+        # 3. Handle On-Demand Screen Reading
+        if route.route_type == RouteType.SCREEN_READ:
+            def _screen_read_gen():
+                from app.tools.screen_reader import read_screen_content
+                pref_vis = route.args.get("prefer_vision", False)
+                prompt = route.args.get("prompt", user_input)
+                res = read_screen_content(
+                    prompt=prompt,
+                    language=effective_lang,
+                    vision_enabled=pref_vis,
+                    ollama_url=self.settings.ollama_url,
+                )
+                self.state.set_last_screen(
+                    window_title=res.window_title,
+                    text=res.text,
+                    method=res.method,
+                    spoken=res.spoken_summary,
+                    display=res.display_text,
+                )
+                self.state.set_last_action("read_screen", res.window_title, "Screen Reader", res.success)
+                logger.info(
+                    '[TOOL] name="read_screen" method="%s" window="%s" latency=%.1fms status="%s"',
+                    res.method,
+                    res.window_title,
+                    res.latency_ms,
+                    "SUCCESS" if res.success else "FAILURE",
+                )
+                out = f"{res.spoken_summary}\n\n{res.display_text}"
+                self.state.add_turn(user_input, out)
+                yield out
+
+            return route, _screen_read_gen()
+
+        # 4. Handle Dedicated Search-First Requests (Deterministic, Zero LLM Calls)
+        if route.route_type == RouteType.WEB_SEARCH:
+            def _search_first_gen():
+                from app.tools.browser_agent import answer_search_query, open_search_in_browser
                 query = route.args.get("query", "") or user_input
-                clean_q = re.sub(
-                    r"^(siapa|apa|kapan|dimana|bagaimana|who is|what is|when is|where is|tell me about)\s+",
-                    "",
-                    query,
-                    flags=re.IGNORECASE,
-                ).strip()
-                summary, url = summarize_topic(clean_q or query, lang=effective_lang)
-                if summary:
-                    if is_id:
-                        out = f"{summary}\n(Sumber: {url})" if url else summary
-                    else:
-                        out = f"{summary}\n(Source: {url})" if url else summary
-                else:
+                open_b = route.args.get("open_browser", False) or route.action == "open_search_results"
+
+                if open_b:
                     open_search_in_browser(query)
                     out = (
-                        f"Saya telah membuka hasil pencarian '{query}' di browser untuk Anda, sir."
+                        f"Membuka hasil pencarian '{query}' di browser, sir."
                         if is_id
-                        else f"I have opened the search results for '{query}' in your browser, sir."
+                        else f"Opening search results for '{query}' in your browser, sir."
                     )
+                    self.state.set_last_action("open_search_results", query, "Web Browser", True)
+                    self.state.add_turn(user_input, out)
+                    yield out
+                    return
+
+                # Zero-LLM extractive factual search pipeline
+                ans = answer_search_query(query, language=effective_lang)
+                self.state.set_last_search(
+                    query=ans.query,
+                    spoken_answer=ans.spoken_answer,
+                    display_answer=ans.display_answer,
+                    sources=ans.sources,
+                )
+                self.state.set_last_action("search_web", query, "Search-First", bool(ans.sources))
+                logger.info(
+                    '[TOOL] name="search_web" query="%s" sources=%d latency=%.1fms status="%s"',
+                    query,
+                    len(ans.sources),
+                    ans.latency_ms,
+                    "SUCCESS" if ans.sources else "FAILURE",
+                )
+                out = ans.display_answer
+                self.state.add_turn(user_input, out)
+                yield out
+
+            return route, _search_first_gen()
+
+        # 5. Handle Web-dependent requests (e.g. Weather, breaking news, live scores)
+        if route.route_type == RouteType.WEB_DEPENDENT:
+            def _web_query_gen():
+                from app.tools.browser_agent import answer_search_query
+                query = route.args.get("query", "") or user_input
+                ans = answer_search_query(query, language=effective_lang)
+                self.state.set_last_search(
+                    query=ans.query,
+                    spoken_answer=ans.spoken_answer,
+                    display_answer=ans.display_answer,
+                    sources=ans.sources,
+                )
+                self.state.set_last_action("search_web", query, "Web Dependent", bool(ans.sources))
+                logger.info(
+                    '[TOOL] name="web_dependent" query="%s" sources=%d latency=%.1fms',
+                    query,
+                    len(ans.sources),
+                    ans.latency_ms,
+                )
+                out = ans.display_answer
                 self.state.add_turn(user_input, out)
                 yield out
 

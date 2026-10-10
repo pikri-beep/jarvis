@@ -31,6 +31,8 @@ class SessionState:
     language_override: Any = None  # Optional[str]: None, "id", or "en"
     max_history_messages: int = 12  # Sliding window of 6 full conversational turns
     last_action_context: Dict[str, Any] = field(default_factory=dict)
+    last_search_context: Dict[str, Any] = field(default_factory=dict)
+    last_screen_context: Dict[str, Any] = field(default_factory=dict)
     pending_action: Optional[PendingAction] = None
 
     def add_message(self, role: str, content: str) -> None:
@@ -63,6 +65,50 @@ class SessionState:
             "success": success,
         }
 
+    def set_last_search(
+        self,
+        query: str,
+        spoken_answer: str,
+        display_answer: str,
+        sources: List[Dict[str, str]],
+        latency_ms: float = 0.0,
+    ) -> None:
+        """Records metadata of the last executed search-first query."""
+        self.last_search_context = {
+            "query": query,
+            "spoken_answer": spoken_answer,
+            "display_answer": display_answer,
+            "sources": sources,
+            "latency_ms": latency_ms,
+        }
+
+    def get_last_search(self) -> Dict[str, Any]:
+        """Returns metadata of the last search-first query."""
+        return self.last_search_context
+
+    def set_last_screen(
+        self,
+        text: str,
+        method: str,
+        spoken_summary: str = "",
+        display_text: str = "",
+        window_title: str = "",
+        latency_ms: float = 0.0,
+    ) -> None:
+        """Records metadata of the last on-demand screen reading."""
+        self.last_screen_context = {
+            "text": text,
+            "method": method,
+            "spoken_summary": spoken_summary,
+            "display_text": display_text,
+            "window_title": window_title,
+            "latency_ms": latency_ms,
+        }
+
+    def get_last_screen(self) -> Dict[str, Any]:
+        """Returns metadata of the last screen reading."""
+        return self.last_screen_context
+
     def get_last_action_target(self) -> Optional[str]:
         """Returns the canonical target of the last executed action."""
         return self.last_action_context.get("target")
@@ -89,4 +135,7 @@ class SessionState:
         """Clears conversation history and action context."""
         self.history.clear()
         self.last_action_context.clear()
+        self.last_search_context.clear()
+        self.last_screen_context.clear()
         self.pending_action = None
+

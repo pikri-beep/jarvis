@@ -228,6 +228,14 @@ def clean_text_for_speech(text: str, language: str = "auto") -> str:
 
     # Remove markdown images ![alt](url)
     cleaned = re.sub(r"!\[[^\]]*\]\([^\)]+\)", " ", cleaned)
+    # Filter out pure citation blocks or UI metadata lines so they are not spoken aloud
+    low_strip = text.strip().lower()
+    if low_strip.startswith((
+        "sumber:", "sumber :", "source:", "sources:",
+        "[screen]", "* active window:", "* local vision model:", "* extracted content:"
+    )):
+        return ""
+
     # Remove code blocks ```...```
     cleaned = re.sub(r"```[\s\S]*?```", " ", cleaned)
     # Remove inline code `...`
@@ -243,7 +251,7 @@ def clean_text_for_speech(text: str, language: str = "auto") -> str:
     # Remove blockquotes >
     cleaned = re.sub(r"^\s*>\s*", "", cleaned, flags=re.MULTILINE)
     # Replace standalone URLs
-    cleaned = re.sub(r"https?://\S+", "link", cleaned)
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
     # Remove stray markdown symbols and dashes
     cleaned = re.sub(r"[>#*`~\[\]]", " ", cleaned)
     cleaned = re.sub(r"--+", " ", cleaned)
