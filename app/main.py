@@ -226,14 +226,13 @@ def run_repl(
     try:
         while orchestrator.state.is_running and not stop_event.is_set():
             try:
-                try:
-                    event_type, event_data = event_queue.get(timeout=0.1)
-                except queue.Empty:
-                    continue
+                event_type, event_data = event_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
 
-                if event_type == "eof":
-                    print("\n\nExiting JARVIS. Goodbye, sir.")
-                    break
+            if event_type == "eof":
+                print("\n\nExiting JARVIS. Goodbye, sir.")
+                break
 
             # EVENT A: VOICE COMMAND (Captured via Always-Listening Wake Word)
             if event_type == "voice":
@@ -387,13 +386,8 @@ def run_repl(
                 if not should_continue:
                     break
                 _print_prompt()
-
-        except KeyboardInterrupt:
-            print("\n\nOperation cancelled. (Type '/exit' to quit)")
-            if wake_detector and mode == "wake":
-                wake_detector.resume()
-            _print_prompt()
-            continue
+    except KeyboardInterrupt:
+        print("\n\nOperation cancelled. Exiting JARVIS, sir.")
     finally:
         # Guaranteed cleanup upon exit or any exception
         stop_event.set()
