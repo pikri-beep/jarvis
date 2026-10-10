@@ -227,6 +227,70 @@ class AppRegistry:
             )
         )
 
+        # 11. Visual Studio Code
+        self.register(
+            AppDefinition(
+                canonical_name="vscode",
+                display_name="Visual Studio Code",
+                known_exes=[
+                    Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe")),
+                    Path(r"C:\Program Files\Microsoft VS Code\Code.exe"),
+                ],
+                reg_app_path_names=["Code.exe"],
+                process_names=["Code.exe"],
+                aliases=[
+                    "vscode", "vs code", "visual studio code", "code editor", "koding", "editor kode"
+                ],
+            )
+        )
+
+        # 12. Task Manager
+        self.register(
+            AppDefinition(
+                canonical_name="taskmgr",
+                display_name="Task Manager",
+                known_exes=[
+                    Path(r"C:\Windows\System32\Taskmgr.exe"),
+                ],
+                process_names=["Taskmgr.exe"],
+                aliases=[
+                    "task manager", "taskmgr", "manajer tugas", "pengelola tugas", "manajer proses"
+                ],
+            )
+        )
+
+        # 13. Paint
+        self.register(
+            AppDefinition(
+                canonical_name="paint",
+                display_name="Paint",
+                known_exes=[
+                    Path(r"C:\Windows\System32\mspaint.exe"),
+                ],
+                reg_app_path_names=["mspaint.exe"],
+                process_names=["mspaint.exe", "PaintApp.exe"],
+                aliases=[
+                    "paint", "mspaint", "menggambar", "gambar", "aplikasi gambar"
+                ],
+            )
+        )
+
+        # 14. Windows Terminal
+        self.register(
+            AppDefinition(
+                canonical_name="terminal",
+                display_name="Windows Terminal",
+                protocol_uri="windows-terminal:",
+                known_exes=[
+                    Path(os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe")),
+                ],
+                process_names=["WindowsTerminal.exe", "wt.exe"],
+                aliases=[
+                    "terminal", "windows terminal", "wt", "konsol"
+                ],
+            )
+        )
+
 
 # Global registry singleton
 registry = AppRegistry()

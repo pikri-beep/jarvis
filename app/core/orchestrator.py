@@ -243,6 +243,8 @@ class Orchestrator:
                         "Commands available:\n"
                         "  /help, help        - Show this help message\n"
                         "  /status, status    - Show system and model status\n"
+                        "  /diag, /diagnostics- Show detailed system, audio, and performance diagnostics\n"
+                        "  /reset             - Reset conversation context and state\n"
                         "  /lang [id|en|auto] - Set interaction language mode\n"
                         "  /wake, /wakeword   - Toggle Always-Listening Wake-Word mode\n"
                         "  /voice, /ptt       - Toggle Push-to-Talk voice mode\n"
@@ -251,6 +253,14 @@ class Orchestrator:
                         "  /clear, clear      - Clear conversation history\n"
                         "  /exit, quit        - Exit JARVIS"
                     )
+                elif route.action == "show_diagnostics":
+                    from app.core.diagnostics import format_diagnostics_text, generate_diagnostics_report
+                    rep = generate_diagnostics_report(self)
+                    yield format_diagnostics_text(rep)
+                elif route.action == "reset_context":
+                    self.state.clear()
+                    yield "Session context and conversation history reset, sir."
+
                 elif route.action == "set_language":
                     target_l = route.args.get("language", "toggle").lower()
                     if target_l in ("id", "indonesia", "indonesian"):
@@ -467,99 +477,215 @@ class Orchestrator:
                         yield out
 
                 elif route.action == "get_time":
-                    from datetime import datetime
-                    now_str = datetime.now().strftime("%I:%M %p").lstrip("0")
-                    out = f"Sekarang pukul {now_str}, sir." if is_id else f"It is {now_str}, sir."
+                    from app.tools.datetime_tool import get_current_time
+                    out = get_current_time(lang=effective_lang)
                     self.state.set_last_action("get_time", "time", "Time", True)
                     logger.info('[TOOL] name="get_time" status="SUCCESS"')
                     reply_chunks.append(out)
                     yield out
 
                 elif route.action == "get_date":
-                    from datetime import datetime
-                    date_str = datetime.now().strftime("%A, %B %d, %Y")
-                    out = f"Hari ini adalah {date_str}, sir." if is_id else f"Today is {date_str}, sir."
+                    from app.tools.datetime_tool import get_current_date
+                    out = get_current_date(lang=effective_lang)
                     self.state.set_last_action("get_date", "date", "Date", True)
                     logger.info('[TOOL] name="get_date" status="SUCCESS"')
                     reply_chunks.append(out)
                     yield out
 
                 elif route.action == "system_info":
-                    import platform
-                    sys_name = platform.system()
-                    release = platform.release()
-                    proc = platform.processor() or "Intel Core i5-1335U"
-                    out = (
-                        f"Sistem berjalan pada {sys_name} {release}, prosesor {proc}, sir."
-                        if is_id
-                        else f"System running on {sys_name} {release}, processor {proc}, sir."
-                    )
+                    from app.tools.windows import get_hardware_specs
+                    specs = get_hardware_specs()
+                    if is_id:
+                        out = (
+                            f"Sistem berjalan pada {specs['os']} {specs['os_release']}, "
+                            f"prosesor {specs['processor']}, {specs['cpu_count_logical']} threads, "
+                            f"penggunaan RAM {specs['ram_percent']}% ({specs['ram_used_gb']} dari {specs['ram_total_gb']} GB), sir."
+                        )
+                    else:
+                        out = (
+                            f"System running on {specs['os']} {specs['os_release']}, "
+                            f"processor {specs['processor']}, {specs['cpu_count_logical']} threads, "
+                            f"RAM usage at {specs['ram_percent']}% ({specs['ram_used_gb']} of {specs['ram_total_gb']} GB), sir."
+                        )
                     self.state.set_last_action("system_info", "system", "System", True)
                     logger.info('[TOOL] name="system_info" status="SUCCESS"')
                     reply_chunks.append(out)
                     yield out
 
                 elif route.action == "battery_status":
-                    try:
-                        import ctypes
-                        class _SPS(ctypes.Structure):
-                            _fields_ = [
-                                ("ACLineStatus", ctypes.c_byte),
-                                ("BatteryFlag", ctypes.c_byte),
-                                ("BatteryLifePercent", ctypes.c_byte),
-                                ("SystemStatusFlag", ctypes.c_byte),
-                                ("BatteryLifeTime", ctypes.c_ulong),
-                                ("BatteryFullLifeTime", ctypes.c_ulong),
-                            ]
-                        sps = _SPS()
-                        if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(sps)):
-                            pct = sps.BatteryLifePercent
-                            mode = (
-                                ("sedang mengisi daya AC" if sps.ACLineStatus == 1 else "menggunakan baterai")
-                                if is_id
-                                else ("charging on AC power" if sps.ACLineStatus == 1 else "running on battery")
-                            )
-                            out = f"Baterai berada pada level {pct}%, {mode}, sir." if is_id else f"Battery is at {pct}%, currently {mode}, sir."
-                        else:
-                            out = "Status daya normal, sir." if is_id else "Power system status normal, sir."
-                    except Exception:
-                        out = "Status daya normal, sir." if is_id else "Battery status is normal, sir."
+                    from app.tools.windows import get_battery_status
+                    batt = get_battery_status()
+                    if batt["has_battery"]:
+                        mode = (
+                            ("sedang mengisi daya AC" if batt["power_plugged"] else "menggunakan baterai")
+                            if is_id
+                            else ("charging on AC power" if batt["power_plugged"] else "running on battery")
+                        )
+                        out = (
+                            f"Baterai berada pada level {batt['percent']}%, {mode}, sir."
+                            if is_id
+                            else f"Battery is at {batt['percent']}%, currently {mode}, sir."
+                        )
+                    else:
+                        out = (
+                            "Perangkat terhubung langsung ke daya listrik AC tanpa baterai internal, sir."
+                            if is_id
+                            else "Device is connected directly to AC power with no internal battery, sir."
+                        )
                     self.state.set_last_action("battery_status", "battery", "Battery", True)
                     logger.info('[TOOL] name="battery_status" status="SUCCESS"')
                     reply_chunks.append(out)
                     yield out
 
                 elif route.action == "take_screenshot":
-                    out = "Mengambil tangkapan layar, sir." if is_id else "Taking screenshot, sir."
-                    self.state.set_last_action("take_screenshot", "screen", "Screenshot", True)
-                    logger.info('[TOOL] name="take_screenshot" status="SUCCESS"')
+                    from app.tools.windows import take_screenshot
+                    success, path, msg = take_screenshot()
+                    self.state.set_last_action("take_screenshot", "screen", "Screenshot", success)
+                    if success:
+                        out = f"Tangkapan layar berhasil disimpan di {path}, sir." if is_id else f"Screenshot saved successfully to {path}, sir."
+                    else:
+                        out = f"Gagal mengambil tangkapan layar, sir: {msg}" if is_id else f"Failed to take screenshot, sir: {msg}"
+                    logger.info('[TOOL] name="take_screenshot" status="%s"', "SUCCESS" if success else "FAILURE")
                     reply_chunks.append(out)
                     yield out
 
                 elif route.action == "lock_screen":
-                    out = "Mengunci komputer, sir." if is_id else "Locking computer, sir."
-                    self.state.set_last_action("lock_screen", "windows", "Lock", True)
-                    logger.info('[TOOL] name="lock_screen" status="SUCCESS"')
+                    from app.tools.windows import lock_windows
+                    success, msg = lock_windows()
+                    self.state.set_last_action("lock_screen", "windows", "Lock", success)
+                    if success:
+                        out = "Mengunci workstation Windows, sir." if is_id else "Locking Windows workstation, sir."
+                    else:
+                        out = f"Gagal mengunci komputer, sir: {msg}" if is_id else f"Failed to lock computer, sir: {msg}"
+                    logger.info('[TOOL] name="lock_screen" status="%s"', "SUCCESS" if success else "FAILURE")
                     reply_chunks.append(out)
                     yield out
 
                 elif route.action == "volume_up":
+                    from app.tools.music import change_volume
+                    change_volume("up")
                     out = "Menaikkan volume suara, sir." if is_id else "Increasing volume, sir."
                     logger.info('[TOOL] name="volume_up" status="SUCCESS"')
                     reply_chunks.append(out)
                     yield out
 
                 elif route.action == "volume_down":
+                    from app.tools.music import change_volume
+                    change_volume("down")
                     out = "Menurunkan volume suara, sir." if is_id else "Decreasing volume, sir."
                     logger.info('[TOOL] name="volume_down" status="SUCCESS"')
                     reply_chunks.append(out)
                     yield out
 
                 elif route.action == "toggle_mute":
+                    from app.tools.music import change_volume
+                    change_volume("mute")
                     out = "Mengalihkan status senyap, sir." if is_id else "Toggling mute, sir."
                     logger.info('[TOOL] name="toggle_mute" status="SUCCESS"')
                     reply_chunks.append(out)
                     yield out
+
+                elif route.action in ("media_play_pause", "media_next", "media_previous", "media_stop"):
+                    from app.tools.music import media_next, media_play_pause, media_previous, media_stop
+                    if route.action == "media_play_pause":
+                        media_play_pause()
+                        out = "Memutar atau menjeda media, sir." if is_id else "Toggled media playback, sir."
+                    elif route.action == "media_next":
+                        media_next()
+                        out = "Memutar lagu berikutnya, sir." if is_id else "Playing next track, sir."
+                    elif route.action == "media_previous":
+                        media_previous()
+                        out = "Memutar lagu sebelumnya, sir." if is_id else "Playing previous track, sir."
+                    elif route.action == "media_stop":
+                        media_stop()
+                        out = "Menghentikan pemutaran media, sir." if is_id else "Stopped media playback, sir."
+                    logger.info('[TOOL] name="%s" status="SUCCESS"', route.action)
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "play_music":
+                    from app.tools.music import play_music
+                    query = route.args.get("query", "")
+                    provider = route.args.get("provider", "auto")
+                    success, p_used, msg = play_music(query=query, provider=provider)
+                    self.state.set_last_action("play_music", query, "Music", success)
+                    if success:
+                        if query:
+                            out = f"Memutar '{query}' melalui {p_used}, sir." if is_id else f"Playing '{query}' via {p_used}, sir."
+                        else:
+                            out = f"Melanjutkan pemutaran musik melalui {p_used}, sir." if is_id else f"Resuming playback via {p_used}, sir."
+                    else:
+                        out = f"Maaf sir, tidak dapat memutar musik: {msg}" if is_id else f"Could not play music, sir: {msg}"
+                    logger.info('[TOOL] name="play_music" query="%s" provider="%s" status="%s"', query, p_used, "SUCCESS" if success else "FAILURE")
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "open_folder":
+                    from app.tools.filesystem import open_folder
+                    folder_target = route.args.get("target", "") or target
+                    success, disp_name, f_path, msg = open_folder(folder_target)
+                    self.state.set_last_action("open_folder", folder_target, disp_name, success)
+                    if success:
+                        out = f"Membuka folder {disp_name}, sir." if is_id else f"Opening {disp_name} folder, sir."
+                    else:
+                        out = f"Maaf sir, tidak dapat membuka folder {disp_name}: {msg}" if is_id else f"Could not open {disp_name} folder, sir: {msg}"
+                    logger.info('[TOOL] name="open_folder" target="%s" status="%s"', folder_target, "SUCCESS" if success else "FAILURE")
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "search_web":
+                    from app.tools.browser_agent import open_search_in_browser, summarize_topic
+                    query = route.args.get("query", "") or target
+                    open_b = route.args.get("open_browser", False)
+                    if open_b or not query:
+                        open_search_in_browser(query or "berita terbaru")
+                        out = f"Membuka pencarian '{query}' di Chrome, sir." if is_id else f"Opening search for '{query}' in Chrome, sir."
+                    else:
+                        summary, src_url = summarize_topic(query, lang=effective_lang)
+                        if summary:
+                            if is_id:
+                                out = f"{summary}\nSumber: {src_url}" if src_url else summary
+                            else:
+                                out = f"{summary}\nSource: {src_url}" if src_url else summary
+                        else:
+                            open_search_in_browser(query)
+                            out = (
+                                f"Saya membuka hasil pencarian '{query}' di Chrome untuk Anda, sir."
+                                if is_id
+                                else f"I've opened the search results for '{query}' in Chrome, sir."
+                            )
+                    self.state.set_last_action("search_web", query, "Web Search", True)
+                    logger.info('[TOOL] name="search_web" query="%s" status="SUCCESS"', query)
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "store_memory":
+                    from app.memory.memory import save_user_memory
+                    key = route.args.get("key", "catatan")
+                    val = route.args.get("value", "")
+                    success, msg = save_user_memory(key=key, value=val, user_input=user_input, language=effective_lang)
+                    self.state.set_last_action("store_memory", key, "Memory", success)
+                    logger.info('[TOOL] name="store_memory" key="%s" status="%s"', key, "SUCCESS" if success else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "recall_memories":
+                    from app.memory.memory import recall_user_memories
+                    query = route.args.get("query", "")
+                    msg = recall_user_memories(query=query, language=effective_lang)
+                    self.state.set_last_action("recall_memories", query, "Memory", True)
+                    logger.info('[TOOL] name="recall_memories" query="%s" status="SUCCESS"', query)
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "forget_memory":
+                    from app.memory.memory import forget_user_memory
+                    key = route.args.get("key", "")
+                    success, msg = forget_user_memory(key=key, language=effective_lang)
+                    self.state.set_last_action("forget_memory", key, "Memory", success)
+                    logger.info('[TOOL] name="forget_memory" key="%s" status="%s"', key, "SUCCESS" if success else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
 
                 else:
                     out = f"Menjalankan perintah {route.action}, sir." if is_id else f"Executing {route.action}, sir."
@@ -576,17 +702,36 @@ class Orchestrator:
         # 3. Handle Web-dependent requests
         if route.route_type == RouteType.WEB_DEPENDENT:
             def _web_query_gen():
-                # In Phase 1, we acknowledge the need for real-time data cleanly as per AGENTS.md
-                yield (
-                    "I notice this request requires real-time information. "
-                    "Web search capability will be enabled in Phase 6. "
-                    "I do not want to provide outdated data, sir."
-                )
+                from app.tools.browser_agent import open_search_in_browser, summarize_topic
+                query = route.args.get("query", "") or user_input
+                clean_q = re.sub(
+                    r"^(siapa|apa|kapan|dimana|bagaimana|who is|what is|when is|where is|tell me about)\s+",
+                    "",
+                    query,
+                    flags=re.IGNORECASE,
+                ).strip()
+                summary, url = summarize_topic(clean_q or query, lang=effective_lang)
+                if summary:
+                    if is_id:
+                        out = f"{summary}\n(Sumber: {url})" if url else summary
+                    else:
+                        out = f"{summary}\n(Source: {url})" if url else summary
+                else:
+                    open_search_in_browser(query)
+                    out = (
+                        f"Saya telah membuka hasil pencarian '{query}' di browser untuk Anda, sir."
+                        if is_id
+                        else f"I have opened the search results for '{query}' in your browser, sir."
+                    )
+                self.state.add_turn(user_input, out)
+                yield out
 
             return route, _web_query_gen()
 
         # 4. Handle AI reasoning request (routed to local LLM)
-        self.state.system_prompt = get_system_prompt(language=effective_lang)
+        from app.memory.memory import get_relevant_memories_prompt
+        mem_prompt = get_relevant_memories_prompt(language=effective_lang)
+        self.state.system_prompt = get_system_prompt(language=effective_lang) + mem_prompt
         self.state.add_message("user", user_input)
         messages = self.state.get_messages_for_llm()
 

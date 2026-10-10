@@ -31,6 +31,7 @@ class WakeWordState(enum.Enum):
     LISTENING_COMMAND = "LISTENING_COMMAND"
     PROCESSING_COMMAND = "PROCESSING_COMMAND"
     SPEAKING = "SPEAKING"
+    RECOVERING = "RECOVERING"
     PAUSED = "PAUSED"
 
     # Backward compatibility aliases
@@ -302,6 +303,9 @@ class WakeWordDetector:
             self.start()
             return
 
+        # Atomically transition through RECOVERING to ensure audio frames during recovery are dropped
+        self.set_state(WakeWordState.RECOVERING)
+
         if self._model:
             self._model.reset()
 
@@ -315,8 +319,8 @@ class WakeWordDetector:
         self._last_detection_time = time.time()
         self._preroll_buffer.clear()
         self._command_chunks.clear()
-        self.set_state(WakeWordState.LISTENING_FOR_WAKE_WORD)
-        logger.info("WakeWordDetector resumed to LISTENING_FOR_WAKE_WORD with cooldown enforced.")
+        self.set_state(WakeWordState.STANDBY)
+        logger.info("WakeWordDetector resumed to STANDBY with cooldown enforced.")
 
     def stop(self) -> None:
         """Stops the audio stream and worker thread, completely releasing PortAudio device."""
@@ -355,11 +359,12 @@ class WakeWordDetector:
 
             current_state = self.state
 
-            # Discard frames when paused, processing command, or speaking response
+            # Discard frames when paused, processing command, speaking response, or recovering
             if current_state in (
                 WakeWordState.PAUSED,
                 WakeWordState.PROCESSING_COMMAND,
                 WakeWordState.SPEAKING,
+                WakeWordState.RECOVERING,
                 WakeWordState.STOPPED,
             ):
                 continue

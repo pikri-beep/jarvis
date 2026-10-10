@@ -187,6 +187,10 @@ def normalize_indonesian_phonetics(text: str) -> str:
     text = re.sub(r"\bwa\b", "We-A", text, flags=re.IGNORECASE)
     text = re.sub(r"\bwindows\b", "Windos", text, flags=re.IGNORECASE)
     text = re.sub(r"\bedge\b", "Ej", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bspotify\b", "Spotifai", text, flags=re.IGNORECASE)
+    text = re.sub(r"\byoutube\b", "Yutub", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bvs\s*code\b", "Vi-Es Kod", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bvscode\b", "Vi-Es Kod", text, flags=re.IGNORECASE)
     text = re.sub(r"\bjarvis\b", "Jarvis", text, flags=re.IGNORECASE)
 
     # Technical abbreviations & hardware
@@ -199,16 +203,21 @@ def normalize_indonesian_phonetics(text: str) -> str:
     text = re.sub(r"\bos\b", "O-Es", text, flags=re.IGNORECASE)
     text = re.sub(r"\burl\b", "U-R-L", text, flags=re.IGNORECASE)
     text = re.sub(r"\bapi\b", "A-P-I", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bwifi\b", "Way-Fay", text, flags=re.IGNORECASE)
 
-    # Memory / storage units
+    # Units and numbers
+    text = re.sub(r"\b(\d+)\s*%", r"\1 persen", text)
     text = re.sub(r"\b(\d+)\s*gb\b", r"\1 Giga", text, flags=re.IGNORECASE)
     text = re.sub(r"\b(\d+)\s*mb\b", r"\1 Mega", text, flags=re.IGNORECASE)
     text = re.sub(r"\b(\d+)\s*tb\b", r"\1 Tera", text, flags=re.IGNORECASE)
+    # Time format e.g. 09.30 -> 9 lewat 30
+    text = re.sub(r"\b(\d{1,2})\.(\d{2})\b", r"\1 lewat \2", text)
 
     return text
 
 
 def clean_text_for_speech(text: str, language: str = "auto") -> str:
+
     """Cleans markdown, URLs, code blocks, and emojis for natural speech synthesis."""
     if not text or not text.strip():
         return ""
@@ -245,6 +254,9 @@ def clean_text_for_speech(text: str, language: str = "auto") -> str:
         cleaned = normalize_indonesian_phonetics(cleaned)
 
     return cleaned
+
+
+normalize_text_for_speech = clean_text_for_speech
 
 
 class SentenceBuffer:

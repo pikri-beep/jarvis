@@ -181,9 +181,13 @@ class CommandRouter:
         "/mic": "list_devices",
         "devices": "list_devices",
         "/devices": "list_devices",
+        "diag": "show_diagnostics",
+        "/diag": "show_diagnostics",
+        "reset": "reset_context",
+        "/reset": "reset_context",
     }
 
-    # Deterministic system patterns (time, date, battery, screenshot, lock, volume)
+    # Deterministic system patterns (time, date, battery, screenshot, lock, volume, media)
     _SYSTEM_PATTERNS = [
         # System Time & Date
         (
@@ -209,6 +213,13 @@ class CommandRouter:
         (r"^(?:(?:decrease|lower|turn down)\s+(?:the\s+)?volume|(?:turunkan|kecilkan)\s+volume)$", "volume_down"),
         (r"^(?:(?:mute|unmute)\s+(?:the\s+)?(?:volume|sound|audio)|senyap(?:kan)?)$", "toggle_mute"),
         (r"^(?:(?:lock|secure)\s+(?:the\s+)?(?:computer|pc|screen|windows)|kunci\s+(?:layar|komputer|pc))$", "lock_screen"),
+        # Music & Media Sessions
+        (r"^(?:play\s+music|pause\s+music|resume\s+music|putar\s+musik|jeda\s+musik|lanjutkan\s+musik|pause|resume)$", "media_play_pause"),
+        (r"^(?:next(?:\s+track|\s+song)?|skip(?:\s+track|\s+song)?|lagu\s+berikutnya|lagu\s+selanjutnya|trek\s+berikutnya)$", "media_next"),
+        (r"^(?:previous(?:\s+track|\s+song)?|prev(?:\s+track|\s+song)?|lagu\s+sebelumnya|trek\s+sebelumnya)$", "media_previous"),
+        (r"^(?:stop\s+music|hentikan\s+musik)$", "media_stop"),
+        # Memory recall
+        (r"^(?:apa\s+yang\s+(?:kamu|anda)\s+ingat(?:\s+tentang\s+saya)?|what\s+do\s+you\s+remember(?:\s+about\s+me)?)$", "recall_memories"),
     ]
 
     # Web-dependent query patterns
@@ -267,7 +278,7 @@ class CommandRouter:
 
         # 2. Check Deterministic Fast Commands if not a conversational inquiry
         if not is_conversational_inquiry:
-            # Check fixed system patterns (time, date, battery, lock, screenshot, volume)
+            # Check fixed system patterns (time, date, battery, lock, screenshot, volume, media)
             for pattern, action in self._SYSTEM_PATTERNS:
                 if re.search(pattern, normalized):
                     return RouteResult(
@@ -277,6 +288,78 @@ class CommandRouter:
                         normalized_input=normalized,
                         description=f"Fast command: {action}",
                     )
+
+            # Check Memory Store (e.g. "ingat bahwa nama saya adalah Alex", "remember that my car is red")
+            mem_store_match = re.match(r"^(?:ingat\s+bahwa|ingat|remember\s+that|remember)\s+(.+)$", normalized)
+            if mem_store_match:
+                raw_fact = mem_store_match.group(1).strip()
+                m_split = re.split(r"\s+(?:saya\s+adalah|adalah|is|merupakan)\s+", raw_fact, maxsplit=1)
+                if len(m_split) == 2:
+                    k, v = m_split[0].strip(), m_split[1].strip()
+                else:
+                    k, v = "fakta", raw_fact
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action="store_memory",
+                    args={"key": k, "value": v, "raw": raw_fact},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description=f"Fast command: store_memory ({k} = {v})",
+                )
+
+            # Check Memory Forget (e.g. "lupakan nama saya", "forget my car")
+            mem_forget_match = re.match(r"^(?:lupakan|forget)\s+(?:tentang\s+|about\s+)?(.+)$", normalized)
+            if mem_forget_match:
+                k = mem_forget_match.group(1).strip()
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action="forget_memory",
+                    args={"key": k},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description=f"Fast command: forget_memory ({k})",
+                )
+
+            # Check Specific Play Music command (e.g. "putar lagu bohemian rhapsody", "play queen")
+            play_match = re.match(r"^(?:play|putar)\s+(?:lagu|musik|track)?\s*(.+)$", normalized)
+            if play_match:
+                song_query = play_match.group(1).strip()
+                if song_query not in ("music", "musik", "lagu"):
+                    return RouteResult(
+                        route_type=RouteType.FAST_COMMAND,
+                        action="play_music",
+                        args={"query": song_query},
+                        raw_input=cleaned,
+                        normalized_input=normalized,
+                        description=f"Fast command: play_music ({song_query})",
+                    )
+
+            # Check Open Standard Folder command (e.g. "buka folder downloads", "buka unduhan")
+            folder_match = re.match(r"^(?:open|buka)\s+(?:folder|direktori|directory)\s*(.+)$", normalized)
+            if folder_match:
+                fname = folder_match.group(1).strip()
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action="open_folder",
+                    args={"target": fname, "folder": fname},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description=f"Fast command: open_folder ({fname})",
+                )
+
+
+            # Check Web Search command (e.g. "cari berita tentang ai", "search python release")
+            search_match = re.match(r"^(?:cari(?:kan)?(?:\s+di\s+internet|\s+di\s+web|\s+di\s+google)?|search(?:\s+the\s+web|\s+online|\s+google)?)\s+(?:tentang\s+)?(.+)$", normalized)
+            if search_match:
+                q_target = search_match.group(1).strip()
+                return RouteResult(
+                    route_type=RouteType.WEB_DEPENDENT,
+                    action="search_web",
+                    args={"query": q_target},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description=f"Web search: {q_target}",
+                )
 
             # Check Application and Website Launch:
             # Matches: open, launch, start, run, buka, jalankan, nyalakan
@@ -299,8 +382,26 @@ class CommandRouter:
                         description="Ambiguous open command: target required",
                     )
 
+                # Case B.0: Folder / Directory (Desktop, Downloads, Documents, etc.)
+                folder_cand = re.sub(r"^(?:folder|berkas|direktori|directory)\s+", "", cleaned_target).strip()
+                from app.tools.filesystem import get_user_folder
+                if (
+                    cleaned_target.startswith(("folder ", "berkas ", "direktori ", "directory "))
+                    or get_user_folder(cleaned_target) is not None
+                ):
+                    target_folder = folder_cand or cleaned_target
+                    return RouteResult(
+                        route_type=RouteType.FAST_COMMAND,
+                        action="open_folder",
+                        args={"target": target_folder, "raw_target": raw_arg.strip()},
+                        raw_input=cleaned,
+                        normalized_input=normalized,
+                        description=f"Fast command: open_folder ({target_folder})",
+                    )
+
                 # Case B: Website or Web Service (YouTube, Google, Gmail, direct URLs, domains)
                 from app.tools.browser import is_known_website, website_registry
+
                 if is_known_website(cleaned_target):
                     canonical_site = website_registry.resolve_canonical_name(cleaned_target)
                     return RouteResult(

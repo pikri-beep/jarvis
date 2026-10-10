@@ -25,6 +25,7 @@ logs/*.log
 data/*.wav
 data/tts_evaluation/
 data/*.mp3
+data/*.db
 
 # Large TTS model binaries (>50MB, downloaded on runtime)
 data/models/piper/*.onnx
