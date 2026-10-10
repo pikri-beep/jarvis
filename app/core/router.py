@@ -217,6 +217,13 @@ class CommandRouter:
         (r"^(?:what(?:'s|\s+is)\s+on\s+(?:my\s+)?screen|apa\s+yang\s+ada\s+di\s+layar)$", "read_screen", False),
         (r"^(?:apa\s+(?:tulisan|isi)\s+(?:di|pada)\s+jendela\s+ini|what\s+is\s+(?:written\s+)?(?:on|in)\s+this\s+window)$", "read_screen", False),
         (r"^(?:baca\s+(?:pesan\s+)?error(?:\s+(?:yang\s+muncul|di\s+layar))?|jelaskan\s+error(?:\s+(?:yang\s+tampil|di\s+layar))?|apa\s+error(?:\s+di\s+layar)?|explain\s+(?:the\s+)?error(?:\s+on\s+screen)?|read\s+(?:the\s+)?error\s+message)$", "read_screen", True),
+        (r"^(?:tombol\s+(?:yang\s+)?(?:merah|hijau|biru)?(?:\s+di\s+(?:sebelah\s+)?(?:kanan|kiri|atas|bawah))?\s*(?:itu\s+)?apa|what\s+is\s+that\s+(?:red\s+)?button(?:\s+on\s+the\s+right)?)$", "screen_element_inquiry", True),
+        (r"^(?:tombol\s+mana\s+yang\s+harus\s+diklik(?:\s+untuk\s+melanjutkan)?|which\s+button\s+to\s+click)$", "screen_element_inquiry", False),
+        (r"^(?:apakah\s+unduhan\s+sudah\s+selesai|is\s+(?:the\s+)?download\s+finished|download\s+selesai)$", "screen_element_inquiry", False),
+        (r"^(?:apakah\s+(?:musik|lagu)(?:nya)?\s+sudah\s+diputar|is\s+(?:the\s+)?(?:music|video)\s+playing)$", "screen_element_inquiry", False),
+        (r"^(?:kenapa\s+(?:langkah\s+tadi\s+)?gagal|mengapa\s+gagal|why\s+did\s+it\s+fail)$", "screen_element_inquiry", False),
+        (r"^(?:aku\s+sedang\s+(?:ada\s+)?di\s+halaman\s+apa|halaman\s+apa\s+ini|what\s+page\s+am\s+i\s+on)$", "screen_element_inquiry", False),
+        (r"^(?:bacakan\s+pesan(?:\s+yang\s+terlihat)?|baca\s+pesan(?:\s+di\s+layar)?|read\s+(?:the\s+)?visible\s+message)$", "screen_element_inquiry", False),
     ]
 
     # Search follow-up patterns
@@ -259,6 +266,8 @@ class CommandRouter:
         # Browser Tab & Navigation Control
         (r"^(?:(?:buka\s+)?tab\s+baru|open\s+(?:a\s+)?new\s+tab|new\s+tab)$", "open_new_tab"),
         (r"^(?:tutup\s+tab(?:\s+ini)?|close\s+(?:this\s+)?tab)$", "close_tab"),
+        (r"^(?:pindah\s+ke\s+tab\s+sebelumnya|tab\s+sebelumnya|previous\s+tab)$", "previous_tab"),
+        (r"^(?:pindah\s+ke\s+tab\s+berikutnya|tab\s+berikutnya|next\s+tab)$", "next_tab"),
         (r"^(?:kembali(?:\s+ke\s+halaman\s+sebelumnya)?|halaman\s+sebelumnya|go\s+back|back)$", "navigate_back"),
         (r"^(?:maju(?:\s+ke\s+halaman\s+berikutnya)?|halaman\s+berikutnya|go\s+forward|forward)$", "navigate_forward"),
         (r"^(?:refresh(?:\s+halaman)?|muat\s+ulang(?:\s+halaman)?|reload(?:\s+page)?|refresh)$", "refresh_page"),
@@ -268,9 +277,14 @@ class CommandRouter:
         (r"^(?:(?:gerakkan|pindahkan)\s+(?:kursor|mouse)\s+ke\s+tengah(?:\s+layar)?|move\s+(?:the\s+)?(?:cursor|mouse)\s+to\s+(?:the\s+)?center(?:\s+of\s+(?:the\s+)?screen)?)$", "move_cursor_center"),
         (r"^(?:klik\s+kanan|right\s+click)$", "mouse_click_right"),
         (r"^(?:double\s+click|klik\s+(?:dua|2)\s+kali|klik\s+ganda)$", "mouse_click_double"),
+        (r"^(?:klik\s+tombol\s+itu|klik\s+itu|click\s+that\s+button|click\s+it)$", "click_contextual_element"),
         (r"^(?:klik|click)$", "mouse_click_left"),
         (r"^(?:scroll\s+ke\s+bawah|scroll\s+down|gulir\s+ke\s+bawah)$", "mouse_scroll_down"),
         (r"^(?:scroll\s+ke\s+atas|scroll\s+up|gulir\s+ke\s+atas)$", "mouse_scroll_up"),
+        (r"^(?:scroll\s+ke\s+kanan|scroll\s+right|gulir\s+ke\s+kanan)$", "mouse_scroll_right"),
+        (r"^(?:scroll\s+ke\s+kiri|scroll\s+left|gulir\s+ke\s+kiri)$", "mouse_scroll_left"),
+        (r"^(?:lanjutkan|continue|proceed)$", "continue_task"),
+        (r"^(?:coba\s+lagi|try\s+again|retry)$", "retry_last_action"),
         # Memory recall
         (r"^(?:apa\s+yang\s+(?:kamu|anda)\s+ingat(?:\s+tentang\s+saya)?|what\s+do\s+you\s+remember(?:\s+about\s+me)?)$", "recall_memories"),
     ]
@@ -563,28 +577,72 @@ class CommandRouter:
                     description="Ambiguous type command: text required",
                 )
 
+            # Check multi-step task chaining (e.g. "klik tombol itu lalu lanjutkan", "buka tab baru lalu ketik...")
+            if any(k in normalized for k in [" lalu ", " kemudian ", " and then "]):
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action="execute_task",
+                    args={"goal": cleaned},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description=f"Multi-step task execution: {cleaned}",
+                )
+
+            # Check Specific Button Click (e.g. "klik tombol play", "klik tombol kirim", "klik tombol itu")
+            click_btn_match = re.match(r"^(?:klik\s+tombol|click\s+button)\s+(.+)$", normalized)
+            if click_btn_match:
+                t_btn = click_btn_match.group(1).strip()
+                if t_btn in ("itu", "that", "tersebut", "ini"):
+                    return RouteResult(
+                        route_type=RouteType.FAST_COMMAND,
+                        action="click_contextual_element",
+                        args={"target": t_btn},
+                        raw_input=cleaned,
+                        normalized_input=normalized,
+                        description="Click contextual element",
+                    )
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action="click_named_button",
+                    args={"button_name": t_btn},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description=f"Click named button: {t_btn}",
+                )
+
             # Check Desktop Input: Key press and shortcuts (e.g. "tekan enter", "press escape", "tekan ctrl+l")
             press_match = re.match(r"^(?:tekan|press)\s+(?:tombol\s+|key\s+)?([a-z0-9\+\s]+)$", normalized)
             if press_match:
                 raw_k = press_match.group(1).strip().replace(" ", "")
-                if "+" in raw_k:
+                key_alias_map = {
+                    "panahbawah": "down",
+                    "panahatas": "up",
+                    "panahkanan": "right",
+                    "panahkiri": "left",
+                    "spasi": "space",
+                    "masuk": "enter",
+                    "kembali": "backspace",
+                    "esc": "escape",
+                    "return": "enter",
+                }
+                mapped_k = key_alias_map.get(raw_k, raw_k)
+                if "+" in mapped_k:
                     return RouteResult(
                         route_type=RouteType.FAST_COMMAND,
                         action="send_hotkey",
-                        args={"combo": raw_k},
+                        args={"combo": mapped_k},
                         raw_input=cleaned,
                         normalized_input=normalized,
-                        description=f"Desktop input: send_hotkey ({raw_k})",
+                        description=f"Desktop input: send_hotkey ({mapped_k})",
                     )
                 else:
-                    norm_k = "escape" if raw_k in ("esc", "escape") else ("enter" if raw_k in ("enter", "return") else raw_k)
                     return RouteResult(
                         route_type=RouteType.FAST_COMMAND,
                         action="press_key",
-                        args={"key": norm_k},
+                        args={"key": mapped_k},
                         raw_input=cleaned,
                         normalized_input=normalized,
-                        description=f"Desktop input: press_key ({norm_k})",
+                        description=f"Desktop input: press_key ({mapped_k})",
                     )
 
             # Check Application Switch / Focus (e.g. "switch ke Chrome", "pindah ke Notepad", "fokus ke Calculator", "focus on Chrome")

@@ -34,6 +34,9 @@ class SessionState:
     last_search_context: Dict[str, Any] = field(default_factory=dict)
     last_screen_context: Dict[str, Any] = field(default_factory=dict)
     pending_action: Optional[PendingAction] = None
+    last_observation: Optional[Any] = None
+    last_focused_element: Optional[Any] = None
+    current_task: Optional[Any] = None
 
     def add_message(self, role: str, content: str) -> None:
         """Appends a message to conversation history with sliding window pruning."""
@@ -131,6 +134,26 @@ class SessionState:
                 return msg.content
         return None
 
+    def set_last_observation(self, obs: Any) -> None:
+        """Stores the most recent multi-layer screen observation."""
+        self.last_observation = obs
+
+    def get_last_observation(self) -> Optional[Any]:
+        """Retrieves the most recent screen observation."""
+        return self.last_observation
+
+    def set_last_focused_element(self, element: Any) -> None:
+        """Stores the most recently referenced or focused UI element."""
+        self.last_focused_element = element
+
+    def get_last_focused_element(self) -> Optional[Any]:
+        """Retrieves the most recently referenced or focused UI element."""
+        return self.last_focused_element
+
+    def clear_focused_element(self) -> None:
+        """Clears the currently focused UI element."""
+        self.last_focused_element = None
+
     def clear(self) -> None:
         """Clears conversation history and action context."""
         self.history.clear()
@@ -138,4 +161,7 @@ class SessionState:
         self.last_search_context.clear()
         self.last_screen_context.clear()
         self.pending_action = None
+        self.last_observation = None
+        self.last_focused_element = None
+        self.current_task = None
 

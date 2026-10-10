@@ -611,19 +611,19 @@ class Orchestrator:
                     yield out
 
                 elif route.action == "play_music":
-                    from app.tools.music import play_music
+                    from app.tools.youtube_controller import execute_youtube_command
                     query = route.args.get("query", "")
-                    provider = route.args.get("provider", "auto")
-                    success, p_used, msg = play_music(query=query, provider=provider)
-                    self.state.set_last_action("play_music", query, "Music", success)
+                    # Call YouTube controller for intelligent search and ranking
+                    success, spoken_yt, meta = execute_youtube_command(user_input, language=effective_lang)
                     if success:
-                        if query:
-                            out = f"Memutar '{query}' melalui {p_used}, sir." if is_id else f"Playing '{query}' via {p_used}, sir."
-                        else:
-                            out = f"Melanjutkan pemutaran musik melalui {p_used}, sir." if is_id else f"Resuming playback via {p_used}, sir."
+                        self.state.set_last_action("play_music", query or user_input, "YouTube", True)
+                        out = spoken_yt
                     else:
-                        out = f"Maaf sir, tidak dapat memutar musik: {msg}" if is_id else f"Could not play music, sir: {msg}"
-                    logger.info('[TOOL] name="play_music" query="%s" provider="%s" status="%s"', query, p_used, "SUCCESS" if success else "FAILURE")
+                        from app.tools.music import play_music
+                        success, p_used, msg = play_music(query=query, provider=route.args.get("provider", "auto"))
+                        self.state.set_last_action("play_music", query, p_used, success)
+                        out = msg if not success else (f"Memutar '{query}' melalui {p_used}, sir." if is_id else f"Playing '{query}' via {p_used}, sir.")
+                    logger.info('[TOOL] name="play_music" query="%s" status="%s"', query, "SUCCESS" if success else "FAILURE")
                     reply_chunks.append(out)
                     yield out
 
@@ -855,6 +855,103 @@ class Orchestrator:
                     reply_chunks.append(msg)
                     yield msg
 
+                elif route.action == "mouse_scroll_right":
+                    from app.tools.desktop import mouse_scroll
+                    ok, msg = mouse_scroll(direction="right", amount=5, language=effective_lang)
+                    self.state.set_last_action("mouse_scroll", "right", "Mouse Scroll", ok)
+                    logger.info('[TOOL] name="mouse_scroll_right" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "mouse_scroll_left":
+                    from app.tools.desktop import mouse_scroll
+                    ok, msg = mouse_scroll(direction="left", amount=5, language=effective_lang)
+                    self.state.set_last_action("mouse_scroll", "left", "Mouse Scroll", ok)
+                    logger.info('[TOOL] name="mouse_scroll_left" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "previous_tab":
+                    from app.tools.desktop import send_shortcut
+                    ok, _ = send_shortcut("ctrl+shift+tab", language=effective_lang)
+                    msg = "Beralih ke tab sebelumnya, sir." if is_id else "Switched to previous tab, sir."
+                    self.state.set_last_action("previous_tab", "tab", "Browser Tab", ok)
+                    logger.info('[TOOL] name="previous_tab" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "next_tab":
+                    from app.tools.desktop import send_shortcut
+                    ok, _ = send_shortcut("ctrl+tab", language=effective_lang)
+                    msg = "Beralih ke tab berikutnya, sir." if is_id else "Switched to next tab, sir."
+                    self.state.set_last_action("next_tab", "tab", "Browser Tab", ok)
+                    logger.info('[TOOL] name="next_tab" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "click_contextual_element":
+                    focused_el = self.state.get_last_focused_element()
+                    if focused_el and focused_el.center_x > 0 and focused_el.center_y > 0:
+                        from app.tools.desktop import move_cursor, mouse_click
+                        move_cursor(focused_el.center_x, focused_el.center_y, language=effective_lang)
+                        ok_click, _ = mouse_click("left", language=effective_lang)
+                        out = f"Mengeklik tombol '{focused_el.name}', sir." if is_id else f"Clicked '{focused_el.name}' button, sir."
+                        self.state.set_last_action("click_contextual_element", focused_el.name, "Mouse Click", ok_click)
+                    else:
+                        out = (
+                            "Tombol yang mana yang ingin Anda klik, sir? Mohon sebutkan nama atau posisinya lebih spesifik."
+                            if is_id
+                            else "Which button would you like me to click, sir? Please specify its label or position."
+                        )
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "click_named_button":
+                    btn_name = route.args.get("button_name", "")
+                    from app.tools.screen_reader import read_screen_content, find_element_by_reference
+                    res = read_screen_content(prompt=btn_name, language=effective_lang)
+                    matched_el = None
+                    if res.observation:
+                        matched_el = find_element_by_reference(btn_name, res.observation)
+                    if matched_el and matched_el.center_x > 0 and matched_el.center_y > 0:
+                        from app.tools.desktop import move_cursor, mouse_click
+                        move_cursor(matched_el.center_x, matched_el.center_y, language=effective_lang)
+                        ok_click, _ = mouse_click("left", language=effective_lang)
+                        out = f"Mengeklik tombol '{matched_el.name}', sir." if is_id else f"Clicked '{matched_el.name}' button, sir."
+                        self.state.set_last_action("click_named_button", matched_el.name, "Mouse Click", ok_click)
+                        self.state.set_last_focused_element(matched_el)
+                    else:
+                        out = (
+                            f"Tombol '{btn_name}' tidak ditemukan di antarmuka aktif, sir."
+                            if is_id
+                            else f"Button '{btn_name}' was not detected on the active screen, sir."
+                        )
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "execute_task":
+                    from app.core.task_executor import TaskExecutor
+                    ctx_el = self.state.get_last_focused_element()
+                    executor = TaskExecutor(max_steps=5, contextual_element=ctx_el)
+                    task_res = executor.run(user_input, language=effective_lang)
+                    if task_res.last_observation:
+                        self.state.set_last_observation(task_res.last_observation)
+                    self.state.set_last_action("execute_task", user_input, "Task Execution", task_res.success)
+                    out = f"{task_res.spoken_summary}\n\n{task_res.display_summary}"
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "continue_task":
+                    out = "Melanjutkan langkah berikutnya, sir." if is_id else "Continuing to next step, sir."
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "retry_last_action":
+                    last_target = self.state.get_last_action_target()
+                    out = f"Mencoba mengulangi tindakan untuk {last_target or 'langkah sebelumnya'}, sir." if is_id else "Retrying previous action, sir."
+                    reply_chunks.append(out)
+                    yield out
+
                 elif route.action == "type_text":
                     from app.tools.desktop import type_text
                     txt = route.args.get("text", "")
@@ -952,6 +1049,12 @@ class Orchestrator:
                     display_text=res.display_text,
                 )
                 self.state.set_last_action("read_screen", res.window_title, "Screen Reader", res.success)
+                if res.observation:
+                    self.state.set_last_observation(res.observation)
+                    from app.tools.screen_reader import find_element_by_reference
+                    matched_el = find_element_by_reference(prompt, res.observation)
+                    if matched_el:
+                        self.state.set_last_focused_element(matched_el)
                 logger.info(
                     '[TOOL] name="read_screen" method="%s" window="%s" latency=%.1fms status="%s"',
                     res.method,

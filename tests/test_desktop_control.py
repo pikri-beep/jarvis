@@ -165,3 +165,106 @@ def test_focus_application():
         cmd = mock_run.call_args[0][0]
         assert "powershell" in cmd[0]
         assert "AppActivate" in cmd[-1]
+
+
+def test_mouse_scroll_horizontal():
+    """Verifies horizontal scrolling triggers MOUSEEVENTF_HWHEEL (0x01000)."""
+    with patch("ctypes.windll.user32.mouse_event") as mock_event:
+        # Scroll right
+        ok_r, msg_r = mouse_scroll("right", amount=2, language="en")
+        assert ok_r is True
+        assert "right" in msg_r
+        mock_event.assert_called_once()
+        args_r = mock_event.call_args[0]
+        assert args_r[0] == 0x01000  # MOUSEEVENTF_HWHEEL
+        assert args_r[3] == 240
+
+        # Scroll left
+        mock_event.reset_mock()
+        ok_l, msg_l = mouse_scroll("left", amount=3, language="id")
+        assert ok_l is True
+        assert "ke kiri" in msg_l
+        args_l = mock_event.call_args[0]
+        assert args_l[0] == 0x01000
+        assert args_l[3] in (-360, ((-360) & 0xFFFFFFFF))
+
+
+def test_send_key_down_and_up():
+    """Verifies sending key down and key up independently without stuck keys."""
+    from app.tools.desktop import send_key_down, send_key_up, release_all_modifiers
+    with patch("ctypes.windll.user32.SendInput") as mock_send:
+        mock_send.return_value = 1
+        ok_down, _ = send_key_down("shift")
+        assert ok_down is True
+
+        ok_up, _ = send_key_up("shift")
+        assert ok_up is True
+        assert mock_send.call_count == 2
+
+        # Release all modifiers
+        mock_send.reset_mock()
+        release_all_modifiers()
+        assert mock_send.call_count == 1
+
+
+def test_get_active_window_details_mock():
+    """Verifies WindowDetails extraction from active foreground window."""
+    from app.tools.desktop import get_active_window_details
+    with patch("ctypes.windll.user32.GetForegroundWindow", return_value=9999), \
+         patch("ctypes.windll.user32.GetWindowTextLengthW", return_value=12), \
+         patch("ctypes.windll.user32.GetWindowTextW") as mock_text, \
+         patch("ctypes.windll.user32.GetWindowRect") as mock_rect, \
+         patch("ctypes.windll.user32.GetWindowThreadProcessId") as mock_pid, \
+         patch("ctypes.windll.user32.IsZoomed", return_value=1), \
+         patch("ctypes.windll.user32.IsIconic", return_value=0), \
+         patch("psutil.Process") as mock_proc:
+        
+        # Setup text buffer fill
+        def set_title(hwnd, buf, n):
+            buf.value = "Chrome Window"
+            return 12
+        mock_text.side_effect = set_title
+        
+        # Setup rect
+        def set_rect(hwnd, r_ref):
+            r = r_ref._obj
+            r.left = 100
+            r.top = 50
+            r.right = 1100
+            r.bottom = 850
+            return 1
+        mock_rect.side_effect = set_rect
+
+        def set_pid(hwnd, p_ref):
+            p_ref._obj.value = 1234
+            return 1
+        mock_pid.side_effect = set_pid
+
+        mock_proc.return_value.name.return_value = "chrome.exe"
+
+        details = get_active_window_details()
+        assert details.is_valid is True
+        assert details.title == "Chrome Window"
+        assert details.process_name == "chrome.exe"
+        assert details.width == 1000
+        assert details.height == 800
+        assert details.is_maximized is True
+
+
+def test_type_text_focus_guard():
+    """Verifies typing is safely aborted when expected window does not match."""
+    from app.tools.desktop import WindowDetails
+    with patch("app.tools.desktop.get_active_window_details") as mock_details, \
+         patch("app.tools.desktop.ensure_window_focus", return_value=(False, "Failed")):
+        
+        # Active window is Notepad, but caller expected Chrome
+        mock_details.return_value = WindowDetails(
+            hwnd=123,
+            title="Untitled - Notepad",
+            process_name="notepad.exe",
+            is_valid=True,
+        )
+        ok, msg = type_text("Secret text", language="id", expected_app="chrome")
+        assert ok is False
+        assert "dibatalkan" in msg
+

@@ -12,11 +12,14 @@ Follows Workstream C & AGENTS.md requirements:
 
 import ctypes
 from ctypes import wintypes
+from dataclasses import dataclass, field
 import logging
 import os
 import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
+
+import psutil
 
 from app.core.logger import setup_logger
 from app.tools.apps import registry as app_registry, normalize_app_name
@@ -84,6 +87,7 @@ MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_HWHEEL = 0x01000
 MOUSEEVENTF_ABSOLUTE = 0x8000
 
 KEYEVENTF_EXTENDEDKEY = 0x0001
@@ -104,6 +108,7 @@ VK_MAP = {
     "spasi": 0x20,
     "backspace": 0x08,
     "delete": 0x2E,
+    "hapus": 0x2E,
     "ctrl": 0x11,
     "control": 0x11,
     "alt": 0x12,
@@ -111,9 +116,13 @@ VK_MAP = {
     "win": 0x5B,
     "windows": 0x5B,
     "left": 0x25,
+    "kiri": 0x25,
     "up": 0x26,
+    "atas": 0x26,
     "right": 0x27,
+    "kanan": 0x27,
     "down": 0x28,
+    "bawah": 0x28,
     "home": 0x24,
     "end": 0x23,
     "pageup": 0x21,
@@ -262,16 +271,38 @@ def mouse_click(button: str = "left", double: bool = False, language: str = "id"
 
 
 def mouse_scroll(direction: str = "down", amount: int = 5, language: str = "id") -> Tuple[bool, str]:
-    """Scrolls the vertical wheel at the current cursor position."""
+    """Scrolls the vertical or horizontal wheel at the current cursor position."""
     is_id = language.lower().startswith("id")
     dir_lower = direction.strip().lower()
-    is_down = dir_lower in ("down", "bawah", "ke bawah", "turun")
 
-    delta = -WHEEL_DELTA * amount if is_down else WHEEL_DELTA * amount
+    if dir_lower in ("down", "bawah", "ke bawah", "turun"):
+        flag = MOUSEEVENTF_WHEEL
+        delta = -WHEEL_DELTA * amount
+        dir_label = "ke bawah" if is_id else "down"
+        dir_en = "down"
+    elif dir_lower in ("up", "atas", "ke atas", "naik"):
+        flag = MOUSEEVENTF_WHEEL
+        delta = WHEEL_DELTA * amount
+        dir_label = "ke atas" if is_id else "up"
+        dir_en = "up"
+    elif dir_lower in ("right", "kanan", "ke kanan"):
+        flag = MOUSEEVENTF_HWHEEL
+        delta = WHEEL_DELTA * amount
+        dir_label = "ke kanan" if is_id else "right"
+        dir_en = "right"
+    elif dir_lower in ("left", "kiri", "ke kiri"):
+        flag = MOUSEEVENTF_HWHEEL
+        delta = -WHEEL_DELTA * amount
+        dir_label = "ke kiri" if is_id else "left"
+        dir_en = "left"
+    else:
+        flag = MOUSEEVENTF_WHEEL
+        delta = -WHEEL_DELTA * amount
+        dir_label = "ke bawah" if is_id else "down"
+        dir_en = "down"
+
     try:
-        ctypes.windll.user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
-        dir_label = "ke bawah" if is_down else "ke atas"
-        dir_en = "down" if is_down else "up"
+        ctypes.windll.user32.mouse_event(flag, 0, 0, delta, 0)
         logger.info("Scrolled mouse %s (%d ticks)", dir_en, amount)
         msg = f"Halaman digulir {dir_label}, sir." if is_id else f"Scrolled {dir_en}, sir."
         return True, msg
@@ -284,11 +315,22 @@ def mouse_scroll(direction: str = "down", amount: int = 5, language: str = "id")
 # Keyboard & Input Automation
 # ---------------------------------------------------------------------------
 
-def type_text(text: str, language: str = "id") -> Tuple[bool, str]:
+def type_text(text: str, language: str = "id", expected_app: Optional[str] = None) -> Tuple[bool, str]:
     """Types text directly into the focused Windows UI element using SendInput UNICODE events."""
     is_id = language.lower().startswith("id")
     if not text:
         return False, "Teks tidak boleh kosong." if is_id else "Text cannot be empty."
+
+    # Guard: verify expected window if specified
+    if expected_app:
+        details = get_active_window_details()
+        target_clean = expected_app.strip().lower()
+        if target_clean not in details.title.lower() and target_clean not in details.process_name.lower():
+            ok_focus, _ = ensure_window_focus(expected_app, language=language)
+            if not ok_focus:
+                logger.warning("Aborted typing: foreground window '%s' does not match '%s'", details.title, expected_app)
+                msg = f"Mengetik dibatalkan: jendela '{expected_app}' tidak aktif." if is_id else f"Typing aborted: window '{expected_app}' is not focused."
+                return False, msg
 
     try:
         events: List[INPUT] = []
@@ -364,8 +406,63 @@ def press_single_key(key_name: str, language: str = "id") -> Tuple[bool, str]:
         return False, str(e)
 
 
+def release_all_modifiers() -> None:
+    """Safely releases modifier keys (Ctrl, Alt, Shift, Win) to prevent stuck keys."""
+    modifier_keys = ["ctrl", "alt", "shift", "win"]
+    up_events = []
+    for k in modifier_keys:
+        vk = VK_MAP.get(k)
+        if vk:
+            inp = INPUT()
+            inp.type = INPUT_KEYBOARD
+            inp.u.ki.wVk = vk
+            inp.u.ki.dwFlags = KEYEVENTF_KEYUP
+            up_events.append(inp)
+    _send_input(up_events)
+
+
+def send_key_down(key_name: str, language: str = "id") -> Tuple[bool, str]:
+    """Sends key-down for a virtual key without releasing it."""
+    is_id = language.lower().startswith("id")
+    k = key_name.strip().lower()
+    vk = VK_MAP.get(k)
+    if not vk:
+        return False, f"Tombol '{key_name}' tidak didukung." if is_id else f"Key '{key_name}' is not supported."
+
+    try:
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp.u.ki.wVk = vk
+        inp.u.ki.dwFlags = 0
+        _send_input([inp])
+        return True, f"Tombol {key_name} ditekan (down)." if is_id else f"Key {key_name} pressed down."
+    except Exception as e:
+        logger.error("Error sending key down %s: %s", key_name, e)
+        return False, str(e)
+
+
+def send_key_up(key_name: str, language: str = "id") -> Tuple[bool, str]:
+    """Sends key-up for a virtual key to release it."""
+    is_id = language.lower().startswith("id")
+    k = key_name.strip().lower()
+    vk = VK_MAP.get(k)
+    if not vk:
+        return False, f"Tombol '{key_name}' tidak didukung." if is_id else f"Key '{key_name}' is not supported."
+
+    try:
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp.u.ki.wVk = vk
+        inp.u.ki.dwFlags = KEYEVENTF_KEYUP
+        _send_input([inp])
+        return True, f"Tombol {key_name} dilepas (up)." if is_id else f"Key {key_name} released up."
+    except Exception as e:
+        logger.error("Error sending key up %s: %s", key_name, e)
+        return False, str(e)
+
+
 def send_shortcut(combo: str, language: str = "id") -> Tuple[bool, str]:
-    """Executes a keyboard shortcut combination (e.g. 'ctrl+l', 'ctrl+t', 'ctrl+w', 'alt+left')."""
+    """Executes a keyboard shortcut combination with guaranteed modifier release (e.g. 'ctrl+l', 'ctrl+t', 'ctrl+w', 'alt+left')."""
     is_id = language.lower().startswith("id")
     tokens = [t.strip().lower() for t in combo.split("+") if t.strip()]
     if not tokens:
@@ -378,34 +475,33 @@ def send_shortcut(combo: str, language: str = "id") -> Tuple[bool, str]:
             return False, f"Tombol '{t}' dalam kombinasi '{combo}' tidak dikenali." if is_id else f"Key '{t}' not recognized."
         vks.append(vk)
 
+    down_events = []
+    for vk in vks:
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp.u.ki.wVk = vk
+        inp.u.ki.dwFlags = 0
+        down_events.append(inp)
+
+    up_events = []
+    for vk in reversed(vks):
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp.u.ki.wVk = vk
+        inp.u.ki.dwFlags = KEYEVENTF_KEYUP
+        up_events.append(inp)
+
     try:
-        down_events = []
-        for vk in vks:
-            inp = INPUT()
-            inp.type = INPUT_KEYBOARD
-            inp.u.ki.wVk = vk
-            inp.u.ki.dwFlags = 0
-            down_events.append(inp)
-
-        up_events = []
-        for vk in reversed(vks):
-            inp = INPUT()
-            inp.type = INPUT_KEYBOARD
-            inp.u.ki.wVk = vk
-            inp.u.ki.dwFlags = KEYEVENTF_KEYUP
-            up_events.append(inp)
-
         _send_input(down_events)
         time.sleep(0.05)
+    finally:
+        # Guarantee all keys are released even if an exception occurs
         _send_input(up_events)
 
-        combo_disp = "+".join(t.upper() for t in tokens)
-        logger.info("Executed keyboard shortcut: %s", combo_disp)
-        msg = f"Kombinasi tombol {combo_disp} telah dikirim, sir." if is_id else f"Shortcut {combo_disp} sent, sir."
-        return True, msg
-    except Exception as e:
-        logger.error("Error sending shortcut %s: %s", combo, e)
-        return False, str(e)
+    combo_disp = "+".join(t.upper() for t in tokens)
+    logger.info("Executed keyboard shortcut: %s", combo_disp)
+    msg = f"Kombinasi tombol {combo_disp} telah dikirim, sir." if is_id else f"Shortcut {combo_disp} sent, sir."
+    return True, msg
 
 
 # ---------------------------------------------------------------------------
@@ -477,3 +573,95 @@ def click_search_field(language: str = "id") -> Tuple[bool, str]:
     except Exception as e:
         logger.error("Error activating search field: %s", e)
         return False, str(e)
+
+
+# ---------------------------------------------------------------------------
+# Window State and Inspection Tools
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WindowDetails:
+    """Rich details of a Windows desktop window."""
+    hwnd: int = 0
+    title: str = ""
+    process_id: int = 0
+    process_name: str = ""
+    rect: Tuple[int, int, int, int] = (0, 0, 0, 0)  # (left, top, right, bottom)
+    width: int = 0
+    height: int = 0
+    is_maximized: bool = False
+    is_minimized: bool = False
+    is_foreground: bool = True
+    is_valid: bool = False
+
+
+def get_active_window_details() -> WindowDetails:
+    """Retrieves full geometry, state, title, and process info of the foreground window."""
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return WindowDetails(title="No Foreground Window", is_valid=False)
+
+        length = user32.GetWindowTextLengthW(hwnd)
+        title = ""
+        if length > 0:
+            buff = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buff, length + 1)
+            title = buff.value.strip()
+
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        proc_id = pid.value
+        proc_name = ""
+        if proc_id > 0:
+            try:
+                p = psutil.Process(proc_id)
+                proc_name = p.name()
+            except Exception:
+                proc_name = "unknown"
+
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        l, t, r, b = rect.left, rect.top, rect.right, rect.bottom
+        w = max(0, r - l)
+        h = max(0, b - t)
+
+        is_max = bool(user32.IsZoomed(hwnd))
+        is_min = bool(user32.IsIconic(hwnd))
+
+        return WindowDetails(
+            hwnd=int(hwnd),
+            title=title or "Active Window",
+            process_id=proc_id,
+            process_name=proc_name,
+            rect=(l, t, r, b),
+            width=w,
+            height=h,
+            is_maximized=is_max,
+            is_minimized=is_min,
+            is_foreground=True,
+            is_valid=True,
+        )
+    except Exception as e:
+        logger.error("Failed to retrieve active window details: %s", e)
+        return WindowDetails(title="Error", is_valid=False)
+
+
+def ensure_window_focus(expected_target: str, language: str = "id") -> Tuple[bool, str]:
+    """Verifies and ensures that the specified application or window target is active."""
+    is_id = language.lower().startswith("id")
+    details = get_active_window_details()
+    target_clean = expected_target.strip().lower()
+
+    if target_clean in details.title.lower() or target_clean in details.process_name.lower():
+        return True, f"Jendela {details.title} sudah aktif." if is_id else f"Window {details.title} is already active."
+
+    # Try activating the target
+    ok, msg = focus_application(expected_target, language=language)
+    if ok:
+        time.sleep(0.15)
+        new_details = get_active_window_details()
+        return True, f"Fokus dialihkan ke {new_details.title}." if is_id else f"Focus switched to {new_details.title}."
+    return False, msg
+

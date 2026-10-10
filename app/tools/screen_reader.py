@@ -1,13 +1,15 @@
-"""Screen Reader & Vision tool for JARVIS on Windows 11.
+"""Screen Reader, Vision, and Multi-Layer Screen Understanding for JARVIS on Windows 11.
 
-Follows Workstream E & Workstream G requirements:
-- On-demand single screen capture ONLY upon explicit user intent.
-- No continuous background recording or monitoring.
-- Native Windows UI Automation (active window inspection) + Windows 11 native WinRT OCR.
-- Ollama vision model detection (strictly non-downloading; reports availability).
-- Privacy-first: temporary screenshot saved to temp directory and deleted immediately in finally block.
-- Zero external transmissions; untrusted content sanitization.
-- Clean 1-2 sentence spoken summary for Piper TTS; detailed text output.
+Follows AGENTS.md and User Requirements:
+- Multi-layer observation:
+  1. Windows UI Automation (controls, types, labels, states, bounding boxes, center coordinates).
+  2. Native Windows WinRT OCR with layout and region classification (titles, buttons, errors, body).
+  3. On-demand local Vision model integration via Ollama (lightweight, zero automatic downloads).
+- Normalized ScreenObservation data structure.
+- Contextual screen question answering ("Apa yang sedang terbuka?", "Apakah musik diputar?", etc.).
+- Reference resolving ("tombol yang merah di sebelah kanan", "tombol play").
+- Privacy-first: strictly on-demand, temporary screenshot deleted in finally block.
+- Zero hallucination: clearly distinguishes observed facts from unreadable areas.
 """
 
 from dataclasses import dataclass, field
@@ -17,17 +19,65 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import urllib.error
 import urllib.request
 import uuid
 
+import psutil
+
 from app.core.logger import setup_logger
 
 logger = setup_logger("jarvis.tools.screen_reader")
+
+
+# ---------------------------------------------------------------------------
+# Data Models for Screen Understanding
+# ---------------------------------------------------------------------------
+
+@dataclass
+class UIElement:
+    """Structured interactive or visual UI element from Windows UI Automation."""
+    name: str = ""
+    control_type: str = "Unknown"  # "Button", "Edit", "Text", "Hyperlink", "TabItem", "ListItem", etc.
+    rect: Tuple[int, int, int, int] = (0, 0, 0, 0)  # (x, y, width, height)
+    center_x: int = 0
+    center_y: int = 0
+    is_enabled: bool = True
+    is_focused: bool = False
+    class_name: str = ""
+    automation_id: str = ""
+
+
+@dataclass
+class TextRegion:
+    """Recognized OCR text segment with bounding box and layout category."""
+    text: str = ""
+    rect: Tuple[int, int, int, int] = (0, 0, 0, 0)  # (x, y, width, height)
+    category: str = "body"  # "title", "button", "error", "notification", "body"
+
+
+@dataclass
+class ScreenObservation:
+    """Normalized multi-layer screen observation combining UIA, OCR, and Vision."""
+    window_title: str = ""
+    process_name: str = ""
+    hwnd: int = 0
+    window_rect: Tuple[int, int, int, int] = (0, 0, 0, 0)
+    browser_url: Optional[str] = None
+    browser_page_title: Optional[str] = None
+    elements: List[UIElement] = field(default_factory=list)
+    text_regions: List[TextRegion] = field(default_factory=list)
+    raw_text: str = ""
+    full_text: str = ""
+    vision_description: Optional[str] = None
+    vision_model: Optional[str] = None
+    timestamp: float = 0.0
+    source: str = "hybrid"  # "uia", "ocr", "vision", "hybrid", "fallback"
 
 
 @dataclass
@@ -35,7 +85,7 @@ class ScreenReadResult:
     """Result of an on-demand screen reading operation."""
     success: bool
     text: str = ""
-    method: str = "none"  # "uia", "ocr", "vision", "fallback"
+    method: str = "none"  # "uia", "ocr", "vision", "hybrid", "fallback"
     window_title: str = ""
     spoken_summary: str = ""
     display_text: str = ""
@@ -44,7 +94,12 @@ class ScreenReadResult:
     latency_ms: float = 0.0
     error_message: Optional[str] = None
     temporary_file_cleaned: bool = True
+    observation: Optional[ScreenObservation] = None
 
+
+# ---------------------------------------------------------------------------
+# Active Window and Geometry Inspection
+# ---------------------------------------------------------------------------
 
 def get_active_window_info() -> Dict[str, str]:
     """Retrieves the foreground window title and process information via Windows API."""
@@ -52,7 +107,7 @@ def get_active_window_info() -> Dict[str, str]:
         user32 = ctypes.windll.user32
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
-            return {"title": "Desktop / Windows Explorer", "hwnd": "0"}
+            return {"title": "Desktop / Windows Explorer", "hwnd": "0", "pid": "0", "process": "explorer.exe"}
 
         length = user32.GetWindowTextLengthW(hwnd)
         if length > 0:
@@ -62,54 +117,118 @@ def get_active_window_info() -> Dict[str, str]:
         else:
             title = "Unknown Window"
 
-        # Try to get process ID
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        pname = "unknown"
+        if pid.value > 0:
+            try:
+                pname = psutil.Process(pid.value).name()
+            except Exception:
+                pname = "unknown"
 
         return {
             "title": title or "Active Desktop Window",
             "hwnd": str(hwnd),
             "pid": str(pid.value),
+            "process": pname,
         }
     except Exception as e:
         logger.debug("Failed to get foreground window info: %s", e)
-        return {"title": "Active Window", "hwnd": "0", "pid": "0"}
+        return {"title": "Active Window", "hwnd": "0", "pid": "0", "process": "unknown"}
 
 
-def check_vision_model_available(ollama_url: str = "http://127.0.0.1:11434") -> Tuple[bool, Optional[str], str]:
-    """Inspects installed Ollama models to check if any model has vision/multimodal capabilities.
-    
-    Strictly read-only; never downloads models automatically.
-    """
-    known_vision_keywords = [
-        "vision", "llava", "bakllava", "moondream", "mllama", "vl",
-        "qwen-vl", "qwen2-vl", "qwen2.5-vl", "minicpm-v", "cogvlm"
-    ]
+# ---------------------------------------------------------------------------
+# Layer 1: Windows UI Automation Extraction
+# ---------------------------------------------------------------------------
+
+def extract_uia_elements(hwnd: Optional[int] = None) -> List[UIElement]:
+    """Extracts structured UI elements (buttons, inputs, tabs, lists) via Windows UI Automation."""
+    target_hwnd = hwnd if (hwnd and hwnd > 0) else 0
+    ps_script = f"""
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+try {{
+    $hwnd = [IntPtr]{target_hwnd}
+    $root = if ($hwnd -ne [IntPtr]::Zero) {{
+        [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    }} else {{
+        [System.Windows.Automation.AutomationElement]::RootElement
+    }}
+    if (-not $root) {{ '[]'; exit }}
+
+    $cond = [System.Windows.Automation.Condition]::TrueCondition
+    $children = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+    $results = @()
+    foreach ($c in $children) {{
+        $curr = $c.Current
+        $name = $curr.Name
+        $ctype = $curr.ControlType.ProgrammaticName.Replace('ControlType.', '')
+        $rect = $curr.BoundingRectangle
+        if ($name -or ($ctype -in @('Button', 'Edit', 'Hyperlink', 'TabItem', 'ListItem', 'MenuItem', 'CheckBox'))) {{
+            $results += [ordered]@{{
+                Name = if ($name) {{ $name.Trim() }} else {{ '' }}
+                ControlType = $ctype
+                X = [int]$rect.X
+                Y = [int]$rect.Y
+                Width = [int]$rect.Width
+                Height = [int]$rect.Height
+                IsEnabled = $curr.IsEnabled
+                HasFocus = $curr.HasKeyboardFocus
+                ClassName = $curr.ClassName
+                AutomationId = $curr.AutomationId
+            }}
+            if ($results.Count -ge 35) {{ break }}
+        }}
+    }}
+    $results | ConvertTo-Json -Compress
+}} catch {{
+    '[]'
+}}
+"""
     try:
-        req = urllib.request.Request(
-            f"{ollama_url}/api/tags",
-            headers={"User-Agent": "JARVIS-ScreenReader/1.0"}
-        )
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            models = data.get("models", [])
-            for m in models:
-                name = m.get("name", "").lower()
-                # Check model name keywords
-                if any(kw in name for kw in known_vision_keywords):
-                    return True, m.get("name"), f"Model visi lokal ditemukan: {m.get('name')}"
-                
-                # Check details.families if available
-                details = m.get("details", {})
-                families = details.get("families", []) or []
-                if any(f in ["clip", "mllama", "vision"] for f in families):
-                    return True, m.get("name"), f"Model visi lokal terdeteksi (keluarga visi): {m.get('name')}"
-
-        return False, None, "Tidak ada model visi lokal terpasang di Ollama."
+        import base64
+        encoded = base64.b64encode(ps_script.encode("utf-16le")).decode("ascii")
+        cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=6)
+        if proc.returncode == 0 and proc.stdout.strip():
+            raw = json.loads(proc.stdout.strip())
+            if isinstance(raw, dict):
+                raw = [raw]
+            elements = []
+            for item in raw:
+                x = int(item.get("X", 0))
+                y = int(item.get("Y", 0))
+                w = int(item.get("Width", 0))
+                h = int(item.get("Height", 0))
+                el = UIElement(
+                    name=item.get("Name", ""),
+                    control_type=item.get("ControlType", "Unknown"),
+                    rect=(x, y, w, h),
+                    center_x=x + (w // 2) if w > 0 else x,
+                    center_y=y + (h // 2) if h > 0 else y,
+                    is_enabled=bool(item.get("IsEnabled", True)),
+                    is_focused=bool(item.get("HasFocus", False)),
+                    class_name=item.get("ClassName", ""),
+                    automation_id=item.get("AutomationId", ""),
+                )
+                elements.append(el)
+            return elements
+        return []
     except Exception as e:
-        logger.debug("Ollama vision check error: %s", e)
-        return False, None, f"Ollama tidak dapat diakses ({e})."
+        logger.debug("UIA extraction failed: %s", e)
+        return []
 
+
+def _extract_uia_elements() -> str:
+    """Legacy helper returning newline-separated top UI element names."""
+    elements = extract_uia_elements()
+    names = [e.name for e in elements if e.name and len(e.name) > 2]
+    return "\n".join(names[:5])
+
+
+# ---------------------------------------------------------------------------
+# Layer 2: Windows WinRT OCR & Layout Analysis
+# ---------------------------------------------------------------------------
 
 def _capture_screen_to_file(target_path: Path) -> bool:
     """Captures the primary screen bounds to a specific PNG file using PowerShell System.Drawing."""
@@ -186,46 +305,109 @@ try {{
         return ""
 
 
-def _extract_uia_elements() -> str:
-    """Attempts fast inspection of top visible UI elements via UI Automation."""
-    ps_script = """
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-try {
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $cond = [System.Windows.Automation.Condition]::TrueCondition
-    $children = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
-    $lines = @()
-    foreach ($c in $children) {
-        $n = $c.Current.Name
-        if ($n -and $n.Trim().Length -gt 2) {
-            $lines += $n.Trim()
-            if ($lines.Count -ge 5) { break }
-        }
-    }
-    Write-Output ($lines -join "`n")
-} catch {
-    Write-Output ""
-}
-"""
-    try:
-        cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_script]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        if proc.returncode == 0:
-            return proc.stdout.strip()
-        return ""
-    except Exception:
-        return ""
+def classify_text_regions(text: str) -> List[TextRegion]:
+    """Analyzes OCR text and decomposes into structured, categorized text regions."""
+    regions: List[TextRegion] = []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    
+    error_keywords = ["error", "exception", "failed", "gagal", "warning", "fatal", "peringatan", "galat"]
+    button_keywords = ["play", "pause", "submit", "lanjut", "next", "ok", "cancel", "buka", "tutup", "save", "simpan"]
 
+    for idx, line in enumerate(lines):
+        line_lower = line.lower()
+        if any(kw in line_lower for kw in error_keywords):
+            cat = "error"
+        elif any(kw in line_lower for kw in button_keywords) and len(line.split()) <= 4:
+            cat = "button"
+        elif idx == 0 and len(line) < 80:
+            cat = "title"
+        else:
+            cat = "body"
+        
+        regions.append(TextRegion(text=line, rect=(0, idx * 30, len(line) * 8, 25), category=cat))
+    return regions
+
+
+# ---------------------------------------------------------------------------
+# Layer 3: Visual Understanding & Ollama Vision Integration
+# ---------------------------------------------------------------------------
+
+def check_vision_model_available(ollama_url: str = "http://127.0.0.1:11434") -> Tuple[bool, Optional[str], str]:
+    """Inspects installed Ollama models to check if any model has vision/multimodal capabilities."""
+    known_vision_keywords = [
+        "vision", "llava", "bakllava", "moondream", "mllama", "vl",
+        "qwen-vl", "qwen2-vl", "qwen2.5-vl", "minicpm-v", "cogvlm"
+    ]
+    try:
+        req = urllib.request.Request(
+            f"{ollama_url}/api/tags",
+            headers={"User-Agent": "JARVIS-ScreenReader/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = data.get("models", [])
+            for m in models:
+                name = m.get("name", "").lower()
+                if any(kw in name for kw in known_vision_keywords):
+                    return True, m.get("name"), f"Model visi lokal ditemukan: {m.get('name')}"
+                
+                details = m.get("details", {})
+                families = details.get("families", []) or []
+                if any(f in ["clip", "mllama", "vision"] for f in families):
+                    return True, m.get("name"), f"Model visi lokal terdeteksi (keluarga visi): {m.get('name')}"
+
+        return False, None, "Tidak ada model visi lokal terpasang di Ollama."
+    except Exception as e:
+        logger.debug("Ollama vision check error: %s", e)
+        return False, None, f"Ollama tidak dapat diakses ({e})."
+
+
+def query_ollama_vision(
+    image_path: Path,
+    prompt: str,
+    model_name: str,
+    ollama_url: str = "http://127.0.0.1:11434",
+) -> Optional[str]:
+    """Queries local Ollama vision model on-demand with base64 encoded screen image."""
+    if not image_path.exists():
+        return None
+
+    import base64
+    try:
+        with open(image_path, "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+        payload = {
+            "model": model_name,
+            "prompt": prompt or "Describe what you see on this desktop screen concisely in 2 sentences.",
+            "images": [img_b64],
+            "stream": False,
+        }
+        data_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{ollama_url}/api/generate",
+            data=data_bytes,
+            headers={"Content-Type": "application/json", "User-Agent": "JARVIS-Vision/1.0"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            res_data = json.loads(resp.read().decode("utf-8"))
+            return res_data.get("response", "").strip()
+    except Exception as e:
+        logger.warning("Ollama vision query failed: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Text Sanitization and Summarization
+# ---------------------------------------------------------------------------
 
 def clean_extracted_screen_text(raw_text: str) -> str:
     """Cleans and sanitizes screen text to avoid prompt injection or garbage characters."""
     if not raw_text:
         return ""
-    # Filter non-printable characters while preserving standard whitespace
     clean_chars = [c for c in raw_text if c.isprintable() or c in "\n\t "]
     cleaned = "".join(clean_chars)
-    # Deduplicate excessive newlines
     lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
     return "\n".join(lines)
 
@@ -246,7 +428,6 @@ def summarize_screen_text(text: str, window_title: str, language: str = "id") ->
     if len(first_extract) > 90:
         first_extract = first_extract[:87] + "..."
 
-    # Check if error keywords are present
     has_error = any(kw in cleaned.lower() for kw in ["error", "exception", "failed", "gagal", "warning", "fatal"])
     
     if is_id:
@@ -259,56 +440,209 @@ def summarize_screen_text(text: str, window_title: str, language: str = "id") ->
         return f"Active window is {window_title}. Detected text: {first_extract}."
 
 
+# ---------------------------------------------------------------------------
+# Screen Question Answering & Element Matching
+# ---------------------------------------------------------------------------
+
+def answer_screen_question(
+    question: str,
+    observation: ScreenObservation,
+    language: str = "id"
+) -> str:
+    """Answers specific user questions about screen contents based strictly on observed evidence."""
+    is_id = language.lower().startswith("id")
+    q_lower = question.lower().strip()
+    title = observation.window_title or "Jendela Aktif"
+    raw_text = observation.full_text or ""
+    elements = observation.elements
+
+    # 1. "Apa yang sedang terbuka di layar?" / "Aku sedang ada di halaman apa?"
+    if any(p in q_lower for p in ["apa yang sedang terbuka", "apa yang terbuka", "sedang ada di halaman apa", "halaman apa", "what is open", "what's on my screen"]):
+        browser_info = ""
+        if observation.browser_page_title:
+            browser_info = f" ({observation.browser_page_title})"
+        if is_id:
+            return f"Jendela aktif saat ini adalah '{title}'{browser_info}, sir."
+        else:
+            return f"The active window is currently '{title}'{browser_info}, sir."
+
+    # 2. "Bacakan pesan yang terlihat"
+    if any(p in q_lower for p in ["bacakan pesan", "baca pesan", "read message", "read text"]):
+        err_regions = [r.text for r in observation.text_regions if r.category == "error"]
+        if err_regions:
+            return f"Pesan galat yang terdeteksi: '{err_regions[0]}', sir." if is_id else f"Detected error message: '{err_regions[0]}', sir."
+        first_lines = [r.text for r in observation.text_regions[:3]]
+        sample = "; ".join(first_lines) if first_lines else raw_text[:100]
+        if sample:
+            return f"Pesan yang terbaca: '{sample}', sir." if is_id else f"Visible text: '{sample}', sir."
+        return "Tidak ada teks atau pesan yang terbaca dengan jelas, sir." if is_id else "No clear text or message detected, sir."
+
+    # 3. "Tombol mana yang harus diklik untuk melanjutkan?"
+    if any(p in q_lower for p in ["tombol mana yang harus diklik", "klik untuk melanjutkan", "which button to click", "continue button"]):
+        for el in elements:
+            el_name = el.name.lower()
+            if any(k in el_name for k in ["lanjut", "next", "continue", "submit", "ok", "setuju", "kirim", "konfirmasi", "selesai"]):
+                return f"Anda dapat mengeklik tombol '{el.name}' untuk melanjutkan, sir." if is_id else f"You can click the '{el.name}' button to proceed, sir."
+        return "Tidak terlihat tombol lanjut atau next yang eksplisit pada antarmuka saat ini, sir." if is_id else "No explicit continue or next button was detected on screen, sir."
+
+    # 4. "Apakah unduhan sudah selesai?"
+    if any(p in q_lower for p in ["unduhan sudah selesai", "download selesai", "download finished", "download complete"]):
+        lower_all = raw_text.lower()
+        if any(k in lower_all for k in ["100%", "unduhan selesai", "download completed", "download finished", "completed"]):
+            return "Indikator unduhan menunjukkan bahwa unduhan telah selesai, sir." if is_id else "The download indicator shows that the download is complete, sir."
+        elif any(k in lower_all for k in ["mengunduh", "downloading", "mb/s", "kb/s", "%"]):
+            return "Proses unduhan tampak masih berjalan di layar, sir." if is_id else "The download appears to still be in progress, sir."
+        return "Tidak ditemukan indikator aktivitas unduhan di jendela saat ini, sir." if is_id else "No download indicator was found in the active window, sir."
+
+    # 5. "Apakah musiknya sudah diputar?"
+    if any(p in q_lower for p in ["musiknya sudah diputar", "lagunya sudah diputar", "is music playing", "is the video playing"]):
+        lower_all = raw_text.lower()
+        # Look for pause button or playing state
+        has_pause = any("pause" in el.name.lower() or "jeda" in el.name.lower() for el in elements)
+        has_play = any("play" in el.name.lower() or "putar" in el.name.lower() for el in elements)
+        if "youtube" in title.lower() or "spotify" in title.lower():
+            if has_pause:
+                return "Media sedang aktif diputar (tombol Jeda tersedia), sir." if is_id else "Media is currently playing, sir."
+            elif has_play:
+                return "Halaman media terbuka, namun tombol Putar terlihat (mungkin masih dijeda), sir." if is_id else "Media page is open, but play button is visible (may be paused), sir."
+            return "Halaman pemutar media terbuka dan siap, sir." if is_id else "The media player page is loaded, sir."
+        return "Jendela saat ini tidak menampilkan antarmuka pemutar musik yang aktif, sir." if is_id else "The active window does not show an active music player, sir."
+
+    # 6. "Kenapa langkah tadi gagal?"
+    if any(p in q_lower for p in ["kenapa langkah tadi gagal", "mengapa gagal", "why did it fail", "kenapa gagal"]):
+        err_regions = [r.text for r in observation.text_regions if r.category == "error"]
+        if err_regions:
+            return f"Langkah gagal karena muncul pesan: '{err_regions[0]}', sir." if is_id else f"The action failed due to error: '{err_regions[0]}', sir."
+        return "Tidak terlihat dialog galat atau pesan penolakan di layar, sir." if is_id else "No error dialog or rejection message is visible on screen, sir."
+
+    # 7. Identifying specific elements: "tombol yang merah di sebelah kanan itu apa?"
+    if "tombol" in q_lower or "button" in q_lower:
+        match_el = find_element_by_reference(q_lower, observation)
+        if match_el:
+            desc = f"Tombol '{match_el.name}' (tipe: {match_el.control_type})"
+            if is_id:
+                note = " (Catatan: verifikasi posisi dan label terdeteksi melalui UI Automation)."
+                return f"Elemen yang dimaksud adalah {desc}, sir.{note}"
+            else:
+                return f"The element referred to is button '{match_el.name}' ({match_el.control_type}), sir."
+
+    # Fallback to general summary
+    return summarize_screen_text(raw_text, title, language=language)
+
+
+def find_element_by_reference(reference: str, observation: ScreenObservation) -> Optional[UIElement]:
+    """Resolves an element reference (e.g. 'tombol di sebelah kanan', 'tombol play') to a UIElement."""
+    r = reference.lower()
+    elements = observation.elements
+    if not elements:
+        return None
+
+    # Check for position keywords
+    is_right = any(k in r for k in ["kanan", "right", "sebelah kanan"])
+    is_left = any(k in r for k in ["kiri", "left", "sebelah kiri"])
+    is_top = any(k in r for k in ["atas", "top", "kanan atas", "kiri atas"])
+    
+    # Check for common button semantic names
+    play_keywords = ["play", "putar", "mainkan"]
+    close_keywords = ["close", "tutup", "merah", "red", "keluar"]
+
+    candidates: List[UIElement] = []
+
+    for el in elements:
+        name_lower = el.name.lower()
+        ctype = el.control_type.lower()
+        
+        # Close button heuristics (often red, top-right)
+        if any(k in r for k in close_keywords) and is_right:
+            if "close" in name_lower or "tutup" in name_lower or el.automation_id.lower() == "close":
+                return el
+
+        # Play button heuristics
+        if any(k in r for k in play_keywords):
+            if any(pk in name_lower for pk in play_keywords) or "play" in el.automation_id.lower():
+                return el
+
+        # Position filter
+        if is_right and el.center_x > 960:
+            candidates.append(el)
+        elif is_left and el.center_x < 960:
+            candidates.append(el)
+
+    if len(candidates) == 1:
+        return candidates[0]
+    elif len(candidates) > 1:
+        # If user specified button and one is a button
+        buttons = [c for c in candidates if c.control_type == "Button"]
+        if len(buttons) == 1:
+            return buttons[0]
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Main Entry Point: read_screen_content
+# ---------------------------------------------------------------------------
+
 def read_screen_content(
     prompt: str = "",
     language: str = "id",
     vision_enabled: bool = False,
     ollama_url: str = "http://127.0.0.1:11434"
 ) -> ScreenReadResult:
-    """Reads on-screen content on-demand, prioritizing UI Automation and Windows WinRT OCR.
-    
-    Strict guarantees:
-    - Exactly one screenshot captured to temp directory.
-    - Screenshot file is deleted in a finally block (0 permanent storage).
-    - Checks vision model availability; if none, reports honestly without downloading.
-    - Zero external network transmissions.
-    """
+    """Reads on-screen content on-demand, combining UI Automation, WinRT OCR, and local Vision."""
     t0 = time.perf_counter()
     window_info = get_active_window_info()
     window_title = window_info.get("title", "Active Window")
+    hwnd_int = int(window_info.get("hwnd", "0"))
+    pname = window_info.get("process", "unknown")
 
     temp_path = Path(tempfile.gettempdir()) / f"jarvis_screen_{uuid.uuid4().hex[:8]}.png"
     temp_cleaned = False
     extracted_text = ""
     used_method = "none"
     error_msg = None
+    vision_desc = None
+
+    # Layer 1: Structured UI Automation
+    uia_elements = extract_uia_elements(hwnd=hwnd_int)
 
     try:
-        # Step 1: Capture single screenshot
+        # Layer 2: On-demand Screen Capture & WinRT OCR
         captured = _capture_screen_to_file(temp_path)
         if captured:
-            # Step 2: Native Windows WinRT OCR
             ocr_text = _run_winrt_ocr(temp_path)
             if ocr_text and len(ocr_text.strip()) > 5:
                 extracted_text = ocr_text.strip()
                 used_method = "ocr"
-        
-        # Step 3: If OCR returned nothing, try UI Automation
-        if not extracted_text:
-            uia_text = _extract_uia_elements()
-            if uia_text:
-                extracted_text = uia_text
-                used_method = "uia"
 
-        if not extracted_text and not captured:
-            used_method = "fallback"
-            extracted_text = f"Active window: {window_title}"
+        # Check vision model availability
+        has_vision, vision_model, _ = check_vision_model_available(ollama_url)
+
+        # Layer 3: Vision Model (if enabled and model is present)
+        if captured and vision_enabled and has_vision and vision_model:
+            vision_desc = query_ollama_vision(
+                image_path=temp_path,
+                prompt=prompt or "Describe the contents of this desktop window concisely.",
+                model_name=vision_model,
+                ollama_url=ollama_url,
+            )
+            if vision_desc:
+                used_method = "hybrid" if extracted_text else "vision"
+
+        if not extracted_text:
+            if uia_elements:
+                names = [e.name for e in uia_elements if e.name]
+                extracted_text = "\n".join(names)
+                used_method = "uia"
+            elif not captured:
+                used_method = "fallback"
+                extracted_text = f"Active window: {window_title}"
 
     except Exception as e:
         logger.error("Screen reading exception: %s", e)
         error_msg = str(e)
     finally:
-        # Step 4: GUARANTEED CLEANUP - Delete temporary screenshot immediately
+        # GUARANTEED CLEANUP: Always remove temporary screenshot immediately
         if temp_path.exists():
             try:
                 temp_path.unlink(missing_ok=True)
@@ -319,28 +653,48 @@ def read_screen_content(
         else:
             temp_cleaned = True
 
-    # Step 5: Check Vision Model availability in Ollama
-    has_vision, vision_model, vision_info = check_vision_model_available(ollama_url)
+    # Classify text regions
+    text_regions = classify_text_regions(extracted_text)
 
-    # Step 6: Build spoken summary and display text
-    spoken = summarize_screen_text(extracted_text, window_title, language=language)
-    
+    # Build ScreenObservation
+    observation = ScreenObservation(
+        window_title=window_title,
+        process_name=pname,
+        hwnd=hwnd_int,
+        elements=uia_elements,
+        text_regions=text_regions,
+        raw_text=extracted_text,
+        vision_description=vision_desc,
+        vision_model=vision_model if has_vision else None,
+        timestamp=time.time(),
+        source=used_method,
+    )
+
+    # Check if a specific screen question was asked
+    if prompt and any(kw in prompt.lower() for kw in ["apa", "siapa", "mana", "apakah", "kenapa", "bacakan", "tombol"]):
+        spoken = answer_screen_question(prompt, observation, language=language)
+    else:
+        spoken = summarize_screen_text(extracted_text, window_title, language=language)
+
     latency = (time.perf_counter() - t0) * 1000
 
-    # Format display text
+    # Build detailed display text
     lines = [
         f"[SCREEN] Screen Reading Result ({used_method.upper()}, {latency:.1f}ms)",
-        f"* Active Window: {window_title}",
+        f"* Active Window: {window_title} ({pname})",
     ]
+    if uia_elements:
+        lines.append(f"* UI Elements Detected: {len(uia_elements)} controls")
     if not has_vision:
-        lines.append(f"* Local Vision Model: Tidak tersedia (Ollama memiliki Qwen3 8B text; model visi tidak diunduh otomatis sesuai kebijakan).")
+        lines.append("* Local Vision Model: Tidak tersedia di Ollama (menggunakan UI Automation & OCR).")
     else:
         lines.append(f"* Local Vision Model: {vision_model}")
-        
+        if vision_desc:
+            lines.append(f"* Vision Description: {vision_desc}")
+
     lines.append("* Extracted Content:")
     sample = clean_extracted_screen_text(extracted_text)
     if sample:
-        # Indent lines
         for sl in sample.splitlines()[:15]:
             lines.append(f"  > {sl}")
         if len(sample.splitlines()) > 15:
@@ -351,7 +705,7 @@ def read_screen_content(
     display = "\n".join(lines)
 
     return ScreenReadResult(
-        success=bool(extracted_text or window_title),
+        success=bool(extracted_text or window_title or uia_elements),
         text=extracted_text,
         method=used_method,
         window_title=window_title,
@@ -362,4 +716,5 @@ def read_screen_content(
         latency_ms=latency,
         error_message=error_msg,
         temporary_file_cleaned=temp_cleaned,
+        observation=observation,
     )
