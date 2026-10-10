@@ -45,6 +45,7 @@ logger = setup_logger("jarvis.main", log_to_console=False)
 
 def print_banner(orchestrator: Orchestrator, wake_active: bool, ptt_active: bool) -> None:
     """Displays startup welcome banner and system diagnostics."""
+    status = orchestrator.get_system_status()
     llm_enabled = orchestrator.settings.llm_enabled
     if llm_enabled:
         ollama_status = "Connected" if status["ollama_connected"] else "Offline"
