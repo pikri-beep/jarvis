@@ -247,6 +247,8 @@ def run_repl(
                     continue
 
                 print("\r  ■ [TRANSCRIBING...] Processing voice command...", end="", flush=True)
+                if wake_detector and mode == "wake":
+                    wake_detector.set_state(WakeWordState.TRANSCRIBING)
                 t_stt_0 = time.time()
                 transcription, info = orchestrator.transcribe_audio(audio_data)
                 stt_time = time.time() - t_stt_0
@@ -266,7 +268,7 @@ def run_repl(
                 metrics = {"rec_duration": duration_s, "stt_time": stt_time}
                 try:
                     if wake_detector and mode == "wake":
-                        wake_detector.set_state(WakeWordState.SPEAKING)
+                        wake_detector.set_state(WakeWordState.INTERPRETING)
                     should_continue = execute_turn(orchestrator, transcription, voice_metrics=metrics)
                 finally:
                     # Guarantee resume of wake-word detection after spoken response completes or on error

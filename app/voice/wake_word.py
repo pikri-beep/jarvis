@@ -28,16 +28,22 @@ class WakeWordState(enum.Enum):
     """Explicit lifecycle states for the wake-word state machine."""
     STOPPED = "STOPPED"
     STANDBY = "STANDBY"
-    LISTENING_COMMAND = "LISTENING_COMMAND"
-    PROCESSING_COMMAND = "PROCESSING_COMMAND"
+    WAKE_DETECTED = "WAKE_DETECTED"
+    WAITING_FOR_SPEECH = "WAITING_FOR_SPEECH"
+    RECORDING = "RECORDING"
+    TRANSCRIBING = "TRANSCRIBING"
+    INTERPRETING = "INTERPRETING"
+    EXECUTING = "EXECUTING"
     SPEAKING = "SPEAKING"
     RECOVERING = "RECOVERING"
     PAUSED = "PAUSED"
 
     # Backward compatibility aliases
     LISTENING_FOR_WAKE_WORD = "STANDBY"
-    WAKE_WORD_DETECTED = "LISTENING_COMMAND"
-    CAPTURING_COMMAND = "LISTENING_COMMAND"
+    LISTENING_COMMAND = "RECORDING"
+    WAKE_WORD_DETECTED = "WAKE_DETECTED"
+    CAPTURING_COMMAND = "RECORDING"
+    PROCESSING_COMMAND = "EXECUTING"
     SPEAKING_RESPONSE = "SPEAKING"
 
 
@@ -106,6 +112,8 @@ class WakeWordDetector:
         self.threshold = self.settings.wake_word_threshold
         self.cooldown = self.settings.wake_word_cooldown
         self.silence_timeout = self.settings.wake_word_silence_timeout
+        self.speech_start_grace = getattr(self.settings, "wake_word_speech_start_grace", 3.0)
+        self.post_speech_silence = getattr(self.settings, "wake_word_post_speech_silence", 1.8)
         self.max_command_duration = self.settings.wake_word_max_command_duration
         self.vad_threshold = self.settings.wake_word_vad_threshold
 
@@ -156,6 +164,8 @@ class WakeWordDetector:
                 self.on_state_change(old_state, new_state)
             except Exception as e:
                 logger.error("Error in on_state_change callback: %s", e)
+
+    transition_to = set_state
 
     def is_listening(self) -> bool:
         """Returns True if actively listening for the wake word."""
@@ -337,6 +347,8 @@ class WakeWordDetector:
         self.set_state(WakeWordState.STANDBY)
         logger.info("WakeWordDetector resumed to STANDBY with cooldown enforced.")
 
+    resume_listening = resume
+
     def stop(self) -> None:
         """Stops the audio stream and worker thread, completely releasing PortAudio device."""
         self._stop_event.set()
@@ -420,8 +432,8 @@ class WakeWordDetector:
                         self.threshold,
                     )
 
-                    # Atomically transition to LISTENING_COMMAND to prevent duplicate activations
-                    self.set_state(WakeWordState.LISTENING_COMMAND)
+                    # 1. Transition to WAKE_DETECTED to confirm wake event and suppress duplicates
+                    self.set_state(WakeWordState.WAKE_DETECTED)
 
                     # Trigger visual / notification callback
                     if self.on_wake_word:
@@ -430,7 +442,7 @@ class WakeWordDetector:
                         except Exception as cb_err:
                             logger.error("Error in on_wake_word callback: %s", cb_err)
 
-                    # Play acknowledgment chime synchronously so it does not bleed into user speech
+                    # Play acknowledgment chime synchronously
                     play_chime(blocking=True)
                     time.sleep(0.04)
 
@@ -447,75 +459,81 @@ class WakeWordDetector:
                     if self._model:
                         self._model.reset()
 
-                    # Initialize command capture state
+                    # 2. Transition to WAITING_FOR_SPEECH (Give user grace period to think and begin speaking)
+                    self.set_state(WakeWordState.WAITING_FOR_SPEECH)
                     speech_started = False
                     consecutive_silence_chunks = 0
                     command_start_monotonic = time.monotonic()
                     logger.info(
-                        "[RECORD] Command capture started (ambient_rms=%.1f, no_speech_timeout=%.1fs, max_dur=%.1fs)",
+                        "[RECORD] WAITING_FOR_SPEECH started (grace_period=%.1fs, post_silence=%.1fs, ambient_rms=%.1f)",
+                        self.speech_start_grace,
+                        self.post_speech_silence,
                         self._ambient_rms,
-                        max(3.0, self.silence_timeout),
-                        self.max_command_duration,
                     )
                     continue
 
-            # State 2: LISTENING_COMMAND (Capturing command speech)
-            elif current_state in (WakeWordState.LISTENING_COMMAND, WakeWordState.CAPTURING_COMMAND):
-                self._command_chunks.append(chunk)
-
-                # Compute frame energy in 16-bit PCM scale
+            # State 2: WAITING_FOR_SPEECH or RECORDING
+            elif current_state in (
+                WakeWordState.WAITING_FOR_SPEECH,
+                WakeWordState.RECORDING,
+                WakeWordState.LISTENING_COMMAND,
+                WakeWordState.CAPTURING_COMMAND,
+            ):
                 chunk_f = chunk.astype(np.float32)
                 chunk_rms = float(np.sqrt(np.mean(chunk_f ** 2)))
 
                 # Dynamic VAD thresholds adapted from ambient noise floor
-                speech_start_threshold = max(60.0, self._ambient_rms * 1.5)
-                silence_threshold = max(35.0, self._ambient_rms * 1.2)
+                speech_start_threshold = max(45.0, self._ambient_rms * 1.3)
+                silence_threshold = max(28.0, self._ambient_rms * 1.1)
 
-                if not speech_started:
+                if current_state == WakeWordState.WAITING_FOR_SPEECH:
+                    elapsed_wait = time.monotonic() - command_start_monotonic
                     if chunk_rms >= speech_start_threshold:
                         speech_started = True
                         consecutive_silence_chunks = 0
-                        elapsed_so_far = time.monotonic() - command_start_monotonic
+                        self.set_state(WakeWordState.RECORDING)
+                        self._command_chunks.append(chunk)
+                        command_start_monotonic = time.monotonic()
                         logger.info(
-                            "[VAD] First speech frame detected (chunk_rms=%.1f, threshold=%.1f, elapsed=%.2fs)",
+                            "[VAD] User started speaking (chunk_rms=%.1f, threshold=%.1f, grace_elapsed=%.2fs)",
                             chunk_rms,
                             speech_start_threshold,
-                            elapsed_so_far,
+                            elapsed_wait,
                         )
-                else:
-                    if chunk_rms < silence_threshold:
-                        consecutive_silence_chunks += 1
+                        continue
+                    elif elapsed_wait >= self.speech_start_grace:
+                        logger.info(
+                            "[RECORD] No speech detected within grace period (%.2fs). Returning to STANDBY.",
+                            elapsed_wait,
+                        )
+                        self._command_chunks.clear()
+                        self._preroll_buffer.clear()
+                        if self._model:
+                            self._model.reset()
+                        self._last_detection_time = time.time()
+                        self.set_state(WakeWordState.STANDBY)
+                        if self.on_silence_timeout:
+                            try:
+                                self.on_silence_timeout()
+                            except Exception as st_err:
+                                logger.error("Error in on_silence_timeout callback: %s", st_err)
+                        continue
                     else:
-                        consecutive_silence_chunks = 0
+                        # Still waiting for user to begin speaking within grace period
+                        continue
+
+                # In RECORDING state
+                self._command_chunks.append(chunk)
+                if chunk_rms < silence_threshold:
+                    consecutive_silence_chunks += 1
+                else:
+                    consecutive_silence_chunks = 0
 
                 elapsed = time.monotonic() - command_start_monotonic
-                silence_chunk_limit = int(max(1.2, self.silence_timeout) * chunks_per_sec)
+                silence_chunk_limit = int(self.post_speech_silence * chunks_per_sec)
 
-                # Check termination conditions using monotonic timing:
-                # 1. No speech began within configured timeout (default 3.0s)
-                # 2. User started speaking and then paused for silence_timeout
-                # 3. Maximum command duration exceeded
-                is_no_speech_timeout = (not speech_started) and (elapsed >= max(3.0, self.silence_timeout))
                 is_speech_ended = speech_started and (consecutive_silence_chunks >= silence_chunk_limit)
                 is_max_duration = elapsed >= self.max_command_duration
-
-                if is_no_speech_timeout:
-                    logger.info(
-                        "[RECORD] Recording stopped: reason=silence_timeout (no speech detected within %.2fs). Returning to standby.",
-                        elapsed,
-                    )
-                    self._command_chunks.clear()
-                    self._preroll_buffer.clear()
-                    if self._model:
-                        self._model.reset()
-                    self._last_detection_time = time.time()
-                    self.set_state(WakeWordState.STANDBY)
-                    if self.on_silence_timeout:
-                        try:
-                            self.on_silence_timeout()
-                        except Exception as st_err:
-                            logger.error("Error in on_silence_timeout callback: %s", st_err)
-                    continue
 
                 if is_speech_ended or is_max_duration:
                     stop_reason = "silence_timeout" if is_speech_ended else "max_duration"

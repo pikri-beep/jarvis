@@ -49,6 +49,24 @@ def media_play_pause() -> Tuple[bool, str]:
         return False, str(e)
 
 
+def pause_music(target: str = "active_media", language: str = "id") -> Tuple[bool, str]:
+    """Pauses active media playback with bilingual confirmation."""
+    is_id = language.lower().startswith("id")
+    ok, err = media_play_pause()
+    if ok:
+        return True, "Menjeda pemutaran musik, sir." if is_id else "Paused music playback, sir."
+    return False, (f"Gagal menjeda musik: {err}" if is_id else f"Failed to pause music: {err}")
+
+
+def resume_music(target: str = "active_media", language: str = "id") -> Tuple[bool, str]:
+    """Resumes active media playback with bilingual confirmation."""
+    is_id = language.lower().startswith("id")
+    ok, err = media_play_pause()
+    if ok:
+        return True, "Melanjutkan pemutaran musik, sir." if is_id else "Resumed music playback, sir."
+    return False, (f"Gagal melanjutkan musik: {err}" if is_id else f"Failed to resume music: {err}")
+
+
 def media_next() -> Tuple[bool, str]:
     """Skips to the next track on the active media session."""
     try:

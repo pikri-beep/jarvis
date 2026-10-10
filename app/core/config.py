@@ -140,14 +140,34 @@ class Settings:
     wake_word_vad_threshold: float = field(
         default_factory=lambda: _get_float("JARVIS_WAKE_WORD_VAD_THRESHOLD", 0.5)
     )
+    wake_word_speech_start_grace: float = field(
+        default_factory=lambda: _get_float(
+            "JARVIS_SPEECH_START_GRACE",
+            _get_float("JARVIS_WAKE_WORD_SPEECH_START_GRACE", 3.0),
+        )
+    )
+    wake_word_post_speech_silence: float = field(
+        default_factory=lambda: _get_float(
+            "JARVIS_POST_SPEECH_SILENCE",
+            _get_float("JARVIS_WAKE_WORD_POST_SPEECH_SILENCE", 1.8),
+        )
+    )
     wake_word_silence_timeout: float = field(
-        default_factory=lambda: _get_float("JARVIS_WAKE_WORD_SILENCE_TIMEOUT", 1.2)
+        default_factory=lambda: _get_float("JARVIS_WAKE_WORD_SILENCE_TIMEOUT", 1.8)
     )
     wake_word_max_command_duration: float = field(
-        default_factory=lambda: _get_float("JARVIS_WAKE_WORD_MAX_COMMAND_DURATION", 8.0)
+        default_factory=lambda: _get_float("JARVIS_WAKE_WORD_MAX_COMMAND_DURATION", 12.0)
     )
     wake_word_models_dir: Path = field(
         default_factory=lambda: _PROJECT_ROOT / "data" / "models" / "wakeword"
+    )
+
+    # Context Interpreter Settings (Layer B/C)
+    interpreter_timeout: float = field(
+        default_factory=lambda: _get_float("JARVIS_INTERPRETER_TIMEOUT", 3.5)
+    )
+    interpreter_temperature: float = field(
+        default_factory=lambda: _get_float("JARVIS_INTERPRETER_TEMPERATURE", 0.1)
     )
 
     # Future Phase Feature Flags

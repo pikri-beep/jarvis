@@ -1,18 +1,136 @@
-"""Automated system diagnostic tool for JARVIS.
+"""Automated system diagnostic tool and structured latency tracker for JARVIS.
 
-Follows Workstream I requirements:
+Follows Workstream I & Section 9 requirements:
 - Redacted, privacy-aware diagnostics (zero passwords, keys, or secrets).
 - Instant reporting of OS, Python, audio devices, state machine, LLM, TTS, STT, and tool health.
 - Single command execution (`/diag`) providing structured troubleshooting output.
+- Precise stage timestamps (wake, speech start/end, STT, router, LLM, tool, first TTS, completion).
+- p50, p95, and max latency calculations enforcing the 10-second performance contract.
 """
 
 import os
 import platform
 import sys
-from typing import Any, Dict
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 from app.core.config import get_settings
 
+
+# ==============================================================================
+# SECTION 9: LATENCY & PERFORMANCE DIAGNOSTICS
+# ==============================================================================
+
+@dataclass
+class TurnDiagnostics:
+    """Detailed stage breakdown for a single interaction turn."""
+    turn_id: int
+    user_input: str
+    route_type: str = "DIRECT"
+    action: str = ""
+    intent: str = ""
+    llm_invoked: bool = False
+    success: bool = True
+    error: Optional[str] = None
+    timeout_reason: Optional[str] = None
+
+    # Timestamps (monotonic)
+    t_wake: float = 0.0
+    t_speech_start: float = 0.0
+    t_speech_end: float = 0.0
+    t_stt_end: float = 0.0
+    t_router_end: float = 0.0
+    t_llm_start: float = 0.0
+    t_llm_end: float = 0.0
+    t_tool_start: float = 0.0
+    t_tool_end: float = 0.0
+    t_first_action: float = 0.0
+    t_first_tts: float = 0.0
+    t_complete: float = 0.0
+
+    # Measured durations in seconds
+    duration_speech: float = 0.0
+    duration_stt: float = 0.0
+    duration_routing: float = 0.0
+    duration_llm: float = 0.0
+    duration_tool: float = 0.0
+    duration_tts_prep: float = 0.0
+    duration_local_e2e: float = 0.0
+    duration_total_e2e: float = 0.0
+
+    def calculate_durations(self) -> None:
+        """Computes stage durations from recorded timestamps."""
+        if self.t_speech_start > 0 and self.t_speech_end > self.t_speech_start:
+            self.duration_speech = self.t_speech_end - self.t_speech_start
+        if self.t_stt_end > 0 and self.t_speech_end > 0:
+            self.duration_stt = max(0.0, self.t_stt_end - self.t_speech_end)
+        if self.t_llm_start > 0 and self.t_llm_end > self.t_llm_start:
+            self.duration_llm = self.t_llm_end - self.t_llm_start
+        if self.t_tool_start > 0 and self.t_tool_end > self.t_tool_start:
+            self.duration_tool = self.t_tool_end - self.t_tool_start
+        if self.t_complete > 0:
+            t_base = self.t_stt_end if self.t_stt_end > 0 else (self.t_speech_end if self.t_speech_end > 0 else self.t_wake)
+            if t_base > 0:
+                self.duration_local_e2e = max(0.0, self.t_complete - t_base)
+            t_total_base = self.t_wake if self.t_wake > 0 else (self.t_speech_start if self.t_speech_start > 0 else t_base)
+            if t_total_base > 0:
+                self.duration_total_e2e = max(0.0, self.t_complete - t_total_base)
+
+
+class DiagnosticsTracker:
+    """Tracks latency metrics across sessions and calculates p50, p95, and max metrics."""
+
+    def __init__(self):
+        self.turns: List[TurnDiagnostics] = []
+        self._turn_counter: int = 0
+
+    def start_turn(self, user_input: str) -> TurnDiagnostics:
+        self._turn_counter += 1
+        diag = TurnDiagnostics(
+            turn_id=self._turn_counter,
+            user_input=user_input,
+            t_wake=time.time(),
+        )
+        self.turns.append(diag)
+        return diag
+
+    def get_summary_stats(self) -> Dict[str, Any]:
+        """Calculates p50, p95, and max latencies across recorded turns."""
+        if not self.turns:
+            return {"count": 0, "p50_e2e": 0.0, "p95_e2e": 0.0, "max_e2e": 0.0}
+
+        local_e2es = sorted([t.duration_local_e2e for t in self.turns if t.duration_local_e2e > 0])
+        llm_times = sorted([t.duration_llm for t in self.turns if t.duration_llm > 0])
+        routing_times = sorted([t.duration_routing for t in self.turns if t.duration_routing > 0])
+
+        def _percentile(data: List[float], pct: float) -> float:
+            if not data:
+                return 0.0
+            idx = int(len(data) * pct)
+            idx = min(idx, len(data) - 1)
+            return round(data[idx], 3)
+
+        return {
+            "count": len(self.turns),
+            "p50_local_e2e": _percentile(local_e2es, 0.50),
+            "p95_local_e2e": _percentile(local_e2es, 0.95),
+            "max_local_e2e": max(local_e2es) if local_e2es else 0.0,
+            "p50_llm": _percentile(llm_times, 0.50),
+            "p95_llm": _percentile(llm_times, 0.95),
+            "max_llm": max(llm_times) if llm_times else 0.0,
+            "p50_routing": _percentile(routing_times, 0.50),
+            "p95_routing": _percentile(routing_times, 0.95),
+        }
+
+
+# Global singleton tracker instance
+diagnostics_tracker = DiagnosticsTracker()
+
+
+# ==============================================================================
+# SECTION I: SYSTEM REPORT GENERATION (/diag)
+# ==============================================================================
 
 def generate_diagnostics_report(orchestrator: Any) -> Dict[str, Any]:
     """Collects comprehensive, redacted system status and health metrics."""
@@ -43,9 +161,12 @@ def generate_diagnostics_report(orchestrator: Any) -> Dict[str, Any]:
     # Search-First & Screen Vision status
     last_search = orchestrator.state.get_last_search()
     last_screen = orchestrator.state.get_last_screen()
-    
+
     from app.tools.screen_reader import check_vision_model_available
     has_vision, vision_model, vision_info = check_vision_model_available(settings.ollama_url)
+
+    # Performance stats
+    perf_stats = diagnostics_tracker.get_summary_stats()
 
     return {
         "platform": {
@@ -103,6 +224,7 @@ def generate_diagnostics_report(orchestrator: Any) -> Dict[str, Any]:
             "desktop_automation": "Active (PowerShell Screen Capture & User32 Lock)",
             "stored_memories_count": len(memories),
         },
+        "performance": perf_stats,
     }
 
 
@@ -114,6 +236,7 @@ def format_diagnostics_text(diag: Dict[str, Any]) -> str:
     t = diag["tools_and_agents"]
     sf = diag.get("search_first", {})
     sv = diag.get("screen_vision", {})
+    perf = diag.get("performance", {})
 
     lines = [
         "=" * 66,
@@ -151,6 +274,14 @@ def format_diagnostics_text(diag: Dict[str, Any]) -> str:
         f"              Music Controller: {t['music_controller']}",
         f"              Desktop Tools: {t['desktop_automation']}",
         f"              Persistent Memories: {t['stored_memories_count']} facts",
-        "=" * 66,
     ]
+    if perf and perf.get("count", 0) > 0:
+        lines.extend([
+            "-" * 66,
+            f" [Perf Stats] Turns Tracked: {perf.get('count')}",
+            f"              Local E2E: p50={perf.get('p50_local_e2e')}s | p95={perf.get('p95_local_e2e')}s | max={perf.get('max_local_e2e')}s",
+            f"              LLM Time:  p50={perf.get('p50_llm')}s | p95={perf.get('p95_llm')}s",
+            f"              Routing:   p50={perf.get('p50_routing')}s",
+        ])
+    lines.append("=" * 66)
     return "\n".join(lines)

@@ -97,15 +97,15 @@ def normalize_command_text(user_input: str) -> str:
 
     low = s.lower()
 
-    # 3. Strip wake word & salutation prefixes
+    # 3. Strip wake word, salutations, & modal courtesy prefixes
     low = re.sub(
-        r'^(?:(?:hey|hi|hello|ok|halo|hai|baik|tolong|coba|bisa|silakan|tolongin)[,:]?\s*)*(?:jarvis|service|travis|harvis|charvis)?\s*[,:]?\s*(?:(?:please|tolong|sekarang|coba|silakan|tolongin)[,:]?\s*)*',
+        r'^(?:(?:hey|hi|hello|ok|halo|hai|baik|tolongin|tolong|coba|bisakah|bisa|dapatkah|dapat|silakan|could\s+you|can\s+you|would\s+you|will\s+you)[,:]?\s*)*(?:jarvis|service|travis|harvis|charvis)?\s*[,:]?\s*(?:(?:please|tolongin|tolong|sekarang|coba|silakan|could\s+you|can\s+you|would\s+you)[,:]?\s*)*',
         '',
         low,
     ).strip()
 
     # 4. Strip trailing courtesy words, particles, and temporal adverbs (iterative)
-    particle_pat = r'\s+(?:dong(?:\s+ya)?|ya(?:\s+dong)?|deh|lah|sih|nih|kan|sekarang|dulu|sebentar|please|now|right\s+now|for\s+me)$'
+    particle_pat = r'\s+(?:dong(?:\s+ya)?|ya(?:\s+dong)?|deh|lah|sih|nih|kan|sekarang|dulu|sebentar|sejenak|please|now|right\s+now|for\s+me|for\s+a\s+moment|a\s+moment|for\s+a\s+second|a\s+second)$'
     for _ in range(3):
         m = re.search(particle_pat, low)
         if m:
@@ -229,7 +229,8 @@ class CommandRouter:
     # Search follow-up patterns
     _SEARCH_FOLLOWUP_PATTERNS = [
         (r"^(?:bacakan\s+hasilnya|bacakan\s+hasil|read\s+(?:the\s+)?result(?:s)?)$", "read_search_result", {}),
-        (r"^(?:sebutkan\s+sumbernya|apa\s+sumbernya|tampilkan\s+sumber(?:nya)?|list\s+(?:the\s+)?sources|what\s+are\s+the\s+sources|show\s+sources|sumbernya\s+apa)$", "list_search_sources", {}),
+        (r"^(?:sebutkan\s+sumbernya|apa\s+sumbernya|apa\s+sumber(?:\s+informasi)?\s+tadi|dari\s+mana\s+sumbernya|tampilkan\s+sumber(?:nya)?|list\s+(?:the\s+)?sources|what\s+are\s+the\s+sources|what\s+was\s+the\s+source|show\s+sources|sumbernya\s+apa)$", "list_search_sources", {}),
+        (r"^(?:bacakan\s+artikel\s+ini|baca\s+artikel\s+ini|read\s+this\s+article|ringkas\s+halaman(?:\s+ini)?(?:\s+yang\s+sedang\s+terbuka)?|summarize\s+this\s+page)$", "read_screen", {}),
     ]
 
     # Deterministic system patterns (time, date, battery, screenshot, lock, volume, media, desktop, browser)
@@ -254,15 +255,16 @@ class CommandRouter:
         (r"^(?:battery(?:\s+status|\s+level|\s+percentage)?|power\s+status|status\s+baterai)$", "battery_status"),
         # Screen & Audio control
         (r"^(?:(?:take|capture|ambil)\s+(?:a\s+)?(?:screenshot|tangkapan\s+layar)|screenshot|tangkapan\s+layar)$", "take_screenshot"),
-        (r"^(?:(?:increase|raise|turn up)\s+(?:the\s+)?volume|(?:naikkan|besarkan)\s+volume)$", "volume_up"),
-        (r"^(?:(?:decrease|lower|turn down)\s+(?:the\s+)?volume|(?:turunkan|kecilkan)\s+volume)$", "volume_down"),
+        (r"^(?:(?:increase|raise|turn up)\s+(?:the\s+)?volume|(?:naikkan|besarkan)\s+volume|turn\s+it\s+up|louder)$", "volume_up"),
+        (r"^(?:(?:decrease|lower|turn down)\s+(?:the\s+)?volume|(?:turunkan|kecilkan)\s+volume|turn\s+it\s+down|quieter)$", "volume_down"),
         (r"^(?:(?:mute|unmute)\s+(?:the\s+)?(?:volume|sound|audio)|senyap(?:kan)?)$", "toggle_mute"),
         (r"^(?:(?:lock|secure)\s+(?:the\s+)?(?:computer|pc|screen|windows)|kunci\s+(?:layar|komputer|pc))$", "lock_screen"),
-        # Music & Media Sessions
-        (r"^(?:play\s+music|pause\s+music|resume\s+music|putar\s+musik|jeda\s+musik|lanjutkan\s+musik|pause|resume)$", "media_play_pause"),
-        (r"^(?:next(?:\s+track|\s+song)?|skip(?:\s+track|\s+song)?|lagu\s+berikutnya|lagu\s+selanjutnya|trek\s+berikutnya)$", "media_next"),
+        # Music & Media Sessions (Deterministic < 50ms bypass)
+        (r"^(?:(?:pause|jeda)\s+(?:the\s+)?(?:music|song|track|playback|video|media|it)|pause\s+it|pause\s+the\s+song|pause\s+the\s+music|jeda\s+musik(?:nya)?|jeda\s+lagu(?:nya)?|pause|pause\s+music)$", "media_play_pause"),
+        (r"^(?:(?:resume|lanjutkan)\s+(?:the\s+)?(?:music|song|track|playback|video|media|it)|resume\s+it|resume\s+playback|resume\s+the\s+music|lanjutkan\s+musik(?:nya)?|lanjutkan\s+lagu(?:nya)?|resume|resume\s+music)$", "media_play_pause"),
+        (r"^(?:next(?:\s+track|\s+song)?|skip(?:\s+the\s+song|\s+track|\s+song)?|lagu\s+berikutnya|lagu\s+selanjutnya|trek\s+berikutnya|skip)$", "media_next"),
         (r"^(?:previous(?:\s+track|\s+song)?|prev(?:\s+track|\s+song)?|lagu\s+sebelumnya|trek\s+sebelumnya)$", "media_previous"),
-        (r"^(?:stop\s+music|hentikan\s+musik)$", "media_stop"),
+        (r"^(?:stop(?:\s+the\s+)?(?:music|song|playback|it)|hentikan\s+(?:musik|lagu)(?:nya)?|stop\s+music)$", "media_stop"),
         # Browser Tab & Navigation Control
         (r"^(?:(?:buka\s+)?tab\s+baru|open\s+(?:a\s+)?new\s+tab|new\s+tab)$", "open_new_tab"),
         (r"^(?:tutup\s+tab(?:\s+ini)?|close\s+(?:this\s+)?tab)$", "close_tab"),
@@ -442,25 +444,27 @@ class CommandRouter:
                 )
 
         m_src = re.match(
-            r"^(?:buka\s+sumber\s+(pertama|kedua|ketiga|ke-?1|ke-?2|ke-?3|1|2|3)|open\s+(?:the\s+)?(first|second|third|1st|2nd|3rd|source\s+1|source\s+2)\s*(?:source)?)$",
+            r"^(?:(buka|open|bacakan|read)\s+(?:sumber|hasil(?:\s+pencarian)?|artikel|the\s+result|the\s+article|the\s+source|result|article|source)?\s*(pertama|kedua|ketiga|ke-?1|ke-?2|ke-?3|1|2|3|first|second|third|1st|2nd|3rd|source\s+1|source\s+2)(?:\s*(?:source|artikel|hasil|result|article))?)$",
             normalized,
             re.IGNORECASE,
         )
         if m_src:
-            w = m_src.group(1) or m_src.group(2)
+            verb = (m_src.group(1) or "buka").lower()
+            w = m_src.group(2)
             idx_map = {
                 "pertama": 1, "ke-1": 1, "ke1": 1, "1": 1, "first": 1, "1st": 1, "source 1": 1,
                 "kedua": 2, "ke-2": 2, "ke2": 2, "2": 2, "second": 2, "2nd": 2, "source 2": 2,
                 "ketiga": 3, "ke-3": 3, "ke3": 3, "3": 3, "third": 3, "3rd": 3,
             }
             idx = idx_map.get(w.lower() if w else "", 1)
+            target_act = "read_search_source_snippet" if verb in ("bacakan", "read") else "open_search_source"
             return RouteResult(
                 route_type=RouteType.FAST_COMMAND,
-                action="open_search_source",
+                action=target_act,
                 args={"index": idx},
                 raw_input=cleaned,
                 normalized_input=normalized,
-                description=f"Open search source #{idx}",
+                description=f"{target_act} #{idx}",
             )
 
         # 1.7. Explicit Search-First Queries (Bypasses LLM deterministically)

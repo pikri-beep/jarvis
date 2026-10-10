@@ -41,6 +41,8 @@ class Orchestrator:
         self.router = CommandRouter()
         self.state = SessionState(system_prompt=get_system_prompt())
         self._explicit_llm = llm_client is not None
+        from app.ai.interpreter import ActionInterpreter
+        self.interpreter = ActionInterpreter(settings=self.settings)
 
     def get_stt(self) -> SpeechToText:
         """Returns the active Speech-to-Text instance (lazy-loaded)."""
@@ -610,6 +612,22 @@ class Orchestrator:
                     reply_chunks.append(out)
                     yield out
 
+                elif route.action == "pause_music":
+                    from app.tools.music import pause_music
+                    ok, msg = pause_music(target="active_media", language=effective_lang)
+                    self.state.set_last_action("pause_music", "active_media", "Media Session", ok)
+                    logger.info('[TOOL] name="pause_music" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
+                elif route.action == "resume_music":
+                    from app.tools.music import resume_music
+                    ok, msg = resume_music(target="active_media", language=effective_lang)
+                    self.state.set_last_action("resume_music", "active_media", "Media Session", ok)
+                    logger.info('[TOOL] name="resume_music" status="%s"', "SUCCESS" if ok else "FAILURE")
+                    reply_chunks.append(msg)
+                    yield msg
+
                 elif route.action == "play_music":
                     from app.tools.youtube_controller import execute_youtube_command
                     query = route.args.get("query", "")
@@ -711,6 +729,23 @@ class Orchestrator:
                         out = f"Sumber ke-{idx+1} tidak ditemukan dalam riwayat pencarian terakhir, sir." if is_id else f"Source #{idx+1} not found in last search results, sir."
                     self.state.set_last_action("open_search_source", str(idx+1), "Search Source", 0 <= idx < len(sources))
                     logger.info('[TOOL] name="open_search_source" index=%d status="%s"', idx+1, "SUCCESS" if (0 <= idx < len(sources)) else "FAILURE")
+                    reply_chunks.append(out)
+                    yield out
+
+                elif route.action == "read_search_source_snippet":
+                    last_search = self.state.get_last_search()
+                    sources = last_search.get("sources", [])
+                    idx = route.args.get("index", 1) - 1
+                    if 0 <= idx < len(sources):
+                        target_src = sources[idx]
+                        snippet = target_src.get("snippet") or target_src.get("title", "")
+                        domain = target_src.get("domain", "")
+                        domain_tag = f" ({domain})" if domain else ""
+                        out = f"Sumber ke-{idx+1}{domain_tag}: {snippet}" if is_id else f"Source #{idx+1}{domain_tag}: {snippet}"
+                    else:
+                        out = f"Sumber ke-{idx+1} tidak ditemukan dalam riwayat pencarian terakhir, sir." if is_id else f"Source #{idx+1} not found in last search results, sir."
+                    self.state.set_last_action("read_search_source_snippet", str(idx+1), "Search Source", 0 <= idx < len(sources))
+                    logger.info('[TOOL] name="read_search_source_snippet" index=%d status="%s"', idx+1, "SUCCESS" if (0 <= idx < len(sources)) else "FAILURE")
                     reply_chunks.append(out)
                     yield out
 
@@ -1134,8 +1169,9 @@ class Orchestrator:
 
             return route, _web_query_gen()
 
-        # 6. Handle AI reasoning request (routed to local LLM)
+        # 6. Handle AI reasoning request (routed to local LLM / Action Interpreter)
         is_mock_llm = self.llm is not None and not isinstance(self.llm, OllamaClient)
+
         if not self.settings.llm_enabled and not self._explicit_llm and not is_mock_llm:
             def _no_llm_gen():
                 if any(w in user_input.lower() for w in ["jangan", "don't", "do not", "tidak usah", "batal"]):
@@ -1151,45 +1187,139 @@ class Orchestrator:
 
             return route, _no_llm_gen()
 
-        from app.memory.memory import get_relevant_memories_prompt
-        mem_prompt = get_relevant_memories_prompt(language=effective_lang)
-        self.state.system_prompt = get_system_prompt(language=effective_lang) + mem_prompt
-        self.state.add_message("user", user_input)
-        messages = self.state.get_messages_for_llm()
-
-        def _llm_gen():
-            full_response = []
-            try:
+        # If explicit mock LLM is provided (e.g. in test suites), stream directly from mock
+        if is_mock_llm:
+            self.state.add_message("user", user_input)
+            messages = self.state.get_messages_for_llm()
+            def _mock_llm_gen():
+                full_resp = []
                 for token in self.llm.chat_stream(messages):
-                    full_response.append(token)
+                    full_resp.append(token)
                     yield token
+                complete = "".join(full_resp)
+                self.state.add_message("assistant", complete)
+            return route, _mock_llm_gen()
 
-                complete_text = "".join(full_response)
-                self.state.add_message("assistant", complete_text)
-                elapsed = time.time() - start_time
-                logger.info("LLM response generated in %.2fs", elapsed)
+        def _interpreted_gen():
+            state_ctx = {
+                "active_media": self.state.get_last_action_target() if ("music" in (self.state.get_last_action_target() or "") or "youtube" in (self.state.get_last_action_target() or "").lower()) else "",
+                "last_action": self.state.last_action_context.get("action", ""),
+                "last_focused_element": getattr(self.state.get_last_focused_element(), "name", ""),
+                "last_search_query": self.state.get_last_search().get("query", ""),
+                "last_search_sources": self.state.get_last_search().get("sources", []),
+                "active_window": self.state.get_last_screen().get("window_title", ""),
+            }
+            plan = self.interpreter.interpret(user_input, state_context=state_ctx, language=effective_lang)
 
-            except OllamaConnectionError:
-                err_msg = (
-                    "I am unable to connect to the local Ollama service. "
-                    "Please ensure Ollama is running on your machine."
+            if plan.is_action:
+                logger.info('[EXEC] Executing interpreted plan: intent=%s, action=%s, target=%s', plan.intent, plan.action, plan.target)
+                out = ""
+                # A. Media Control
+                if plan.intent == "media_control":
+                    if plan.action == "pause":
+                        from app.tools.music import pause_music
+                        _, out = pause_music(target=plan.target, language=effective_lang)
+                        self.state.set_last_action("pause_music", "active_media", "Media Session", True)
+                    elif plan.action == "resume":
+                        from app.tools.music import resume_music
+                        _, out = resume_music(target=plan.target, language=effective_lang)
+                        self.state.set_last_action("resume_music", "active_media", "Media Session", True)
+                    elif plan.action == "stop":
+                        from app.tools.music import media_stop
+                        media_stop()
+                        out = "Menghentikan pemutaran musik, sir." if is_id else "Stopped music playback, sir."
+                        self.state.set_last_action("stop_music", "active_media", "Media Session", True)
+                    elif plan.action == "play":
+                        from app.tools.youtube_controller import execute_youtube_command
+                        q_play = plan.target or plan.parameters.get("query", user_input)
+                        _, out, _ = execute_youtube_command(q_play, language=effective_lang)
+                        self.state.set_last_action("play_music", q_play, "YouTube", True)
+                    elif plan.action in ("volume_up", "volume_down", "mute"):
+                        from app.tools.music import change_volume
+                        dir_v = "up" if plan.action == "volume_up" else ("down" if plan.action == "volume_down" else "mute")
+                        _, out = change_volume(dir_v)
+                    elif plan.action in ("next", "previous"):
+                        from app.tools.music import media_next, media_previous
+                        if plan.action == "next":
+                            media_next()
+                        else:
+                            media_previous()
+                        out = "Beralih lagu, sir." if is_id else "Skipped track, sir."
+
+                # B. Web Search
+                elif plan.intent == "web_search":
+                    from app.tools.browser_agent import answer_search_query, open_search_in_browser
+                    q_search = plan.parameters.get("query") or plan.target or user_input
+                    if plan.action == "open_search_results":
+                        open_search_in_browser(q_search)
+                        out = f"Membuka pencarian Google untuk '{q_search}' di browser, sir." if is_id else f"Opening search for '{q_search}' in browser, sir."
+                    else:
+                        ans = answer_search_query(q_search, language=effective_lang)
+                        self.state.set_last_search(query=ans.query, spoken_answer=ans.spoken_answer, display_answer=ans.display_answer, sources=ans.sources)
+                        out = ans.display_answer
+
+                # C. Page Reader
+                elif plan.intent == "page_reader":
+                    from app.tools.browser_agent import fetch_page_content
+                    sources = self.state.get_last_search().get("sources", [])
+                    idx = int(plan.parameters.get("index", 1)) - 1
+                    if 0 <= idx < len(sources):
+                        target_url = sources[idx].get("url")
+                        ok_fetch, p_title, p_content = fetch_page_content(target_url, max_chars=1200)
+                        if ok_fetch:
+                            out = f"Ringkasan artikel '{p_title}':\n\n{p_content[:400]}..." if is_id else f"Article summary '{p_title}':\n\n{p_content[:400]}..."
+                        else:
+                            out = f"Gagal membaca isi artikel: {p_content}" if is_id else f"Could not read article: {p_content}"
+                    else:
+                        out = "Tidak ada halaman atau artikel yang tersimpan dalam riwayat pencarian, sir." if is_id else "No active article found in search history, sir."
+
+                # D. Application & Website Launch
+                elif plan.intent == "open_application":
+                    from app.tools.apps import launch_application
+                    _, _, out = launch_application(plan.target)
+                elif plan.intent == "open_website":
+                    from app.tools.browser import launch_website
+                    _, _, _, out = launch_website(plan.target)
+
+                # E. Screen Reader
+                elif plan.intent == "screen_read":
+                    from app.tools.screen_reader import read_screen_content
+                    res = read_screen_content(prompt=user_input, language=effective_lang)
+                    out = f"{res.spoken_summary}\n\n{res.display_text}"
+
+                if not out:
+                    out = "Tindakan telah dijalankan, sir." if is_id else "Action executed, sir."
+
+                self.state.add_turn(user_input, out)
+                yield out
+                return
+
+            elif plan.type == "clarify":
+                clarify_msg = plan.response or (
+                    "Mohon sebutkan target yang Anda maksud lebih spesifik, sir."
+                    if is_id
+                    else "Please specify which target you mean, sir."
                 )
-                logger.error("Ollama connection error during chat.")
-                yield err_msg
-            except OllamaModelNotFoundError:
-                err_msg = (
-                    f"The configured model '{self.settings.model}' is not available in Ollama. "
-                    f"Please run 'ollama pull {self.settings.model}'."
-                )
-                logger.error("Model '%s' not found.", self.settings.model)
-                yield err_msg
-            except LLMError as e:
-                err_msg = f"I encountered an error while processing your request: {e}"
-                logger.error("LLM processing error: %s", e)
-                yield err_msg
-            except Exception as e:
-                err_msg = "An unexpected error occurred while communicating with the assistant."
-                logger.exception("Unexpected error in LLM generation: %s", e)
-                yield err_msg
+                self.state.add_turn(user_input, clarify_msg)
+                yield clarify_msg
+                return
 
-        return route, _llm_gen()
+            # Conversational Response
+            if plan.response:
+                self.state.add_turn(user_input, plan.response)
+                yield plan.response
+            else:
+                self.state.add_message("user", user_input)
+                messages = self.state.get_messages_for_llm()
+                full_resp = []
+                try:
+                    for token in self.llm.chat_stream(messages):
+                        full_resp.append(token)
+                        yield token
+                    self.state.add_message("assistant", "".join(full_resp))
+                except Exception as exc:
+                    logger.error("LLM streaming error: %s", exc)
+                    fallback_err = "Maaf sir, terjadi kesalahan saat menghubungi asisten." if is_id else "Error connecting to assistant."
+                    yield fallback_err
+
+        return route, _interpreted_gen()
