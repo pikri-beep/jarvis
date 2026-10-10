@@ -42,31 +42,46 @@ class WakeWordState(enum.Enum):
 
 
 def generate_chime_audio(sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Generates a pleasant two-tone digital acknowledgment chime (A5 880Hz + E6 1318.5Hz).
+    """Generates a pleasant two-tone digital acknowledgment chime (C6 1046.5Hz + E6 1318.5Hz).
 
     Uses a cosine amplitude envelope for smooth fading without clicks or pops.
     """
-    duration1 = 0.07  # 70ms first tone
+    duration1 = 0.06  # 60ms first tone
     duration2 = 0.08  # 80ms second tone
 
     t1 = np.linspace(0, duration1, int(sample_rate * duration1), endpoint=False)
     t2 = np.linspace(0, duration2, int(sample_rate * duration2), endpoint=False)
 
-    f1 = 880.0    # A5
+    f1 = 1046.5   # C6
     f2 = 1318.5   # E6
 
     env1 = np.sin(np.pi * np.linspace(0, 1, len(t1)))
     env2 = np.sin(np.pi * np.linspace(0, 1, len(t2)))
 
-    tone1 = np.sin(2 * np.pi * f1 * t1) * env1 * 0.18
-    tone2 = np.sin(2 * np.pi * f2 * t2) * env2 * 0.18
+    tone1 = np.sin(2 * np.pi * f1 * t1) * env1 * 0.40
+    tone2 = np.sin(2 * np.pi * f2 * t2) * env2 * 0.40
 
     chime = np.concatenate([tone1, tone2]).astype(np.float32)
     return chime
 
 
 def play_chime(sample_rate: int = SAMPLE_RATE, blocking: bool = False) -> None:
-    """Plays the acknowledgment chime via default audio output."""
+    """Plays a crisp digital acknowledgment ping when the wake word is detected.
+
+    On Windows, uses native winsound.Beep for instantaneous, non-contending
+    hardware audio playback without PortAudio stream initialization overhead.
+    Falls back to sounddevice if winsound is unavailable.
+    """
+    # 1. Primary on Windows: native winsound.Beep (instant, zero stream contention)
+    try:
+        import winsound
+        winsound.Beep(1046, 60)  # C6 (60ms)
+        winsound.Beep(1318, 80)  # E6 (80ms)
+        return
+    except Exception as e:
+        logger.debug("winsound ping failed (%s), falling back to sounddevice", e)
+
+    # 2. Fallback: sounddevice
     try:
         chime = generate_chime_audio(sample_rate)
         sd.play(chime, samplerate=sample_rate)
