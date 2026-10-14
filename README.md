@@ -251,6 +251,34 @@ Test coverage includes 71 automated tests across:
 - `tests/test_voice.py`: Faster-Whisper transcription, silence thresholds, audio resampling, and recorder lifecycle.
 - `tests/test_tts.py`: Piper speech synthesis, markdown text cleaning, sentence buffering, phonetic normalization, and playback queue lifecycle.
 - `tests/test_wake_word.py`: openWakeWord detector lifecycle, state machine transitions, acknowledgment chime synthesis, and self-activation prevention during TTS.
+- `tests/test_user_simulator.py`: In-memory audio injection, Groq cognitive persona planner, Edge-TTS voice generation, and multi-modal Windows OS state verification.
+
+---
+
+## Simulated User Agent (Voice E2E Human Tester)
+
+JARVIS features a dedicated autonomous **Simulated User Agent** that tests JARVIS by actually using it like a real human being:
+- **Speaks with realistic human voice** (via Microsoft Edge-TTS neural voices).
+- **Injects 16kHz PCM audio** into JARVIS's STT / wake-word pipeline in real-time.
+- **Inspects Windows OS state** (verifying processes like `notepad.exe` or `chrome.exe` via `psutil`).
+- **Live Terminal Dashboard** displaying two-way dialogue, latency meters (TTFT, STT, TTS), and a scorecard.
+- **Powered by Groq Cloud API** (free, ultra-fast LLM persona) with smart deterministic fallback if no API key is set.
+
+### Usage
+
+```powershell
+# List all available testing scenarios
+python scripts/run_user_simulator.py --list
+
+# Run Scenario SC-01 (Desktop & App Automation)
+python scripts/run_user_simulator.py --scenario SC-01
+
+# Run fast validation mode (skips human conversational pauses)
+python scripts/run_user_simulator.py --scenario SC-01 --fast
+
+# Run all scenarios sequentially
+python scripts/run_user_simulator.py --scenario all --fast
+```
 
 ---
 

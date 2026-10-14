@@ -14,12 +14,11 @@ logger = setup_logger("jarvis.voice.stt")
 
 
 DEFAULT_INITIAL_PROMPT = (
-    "Halo JARVIS. Tolong buka Chrome, Google Chrome, YouTube, Open YouTube, Buka YouTube, "
-    "Instagram, Buka Instagram, WhatsApp, Notepad, Edge, Kalkulator, Pengaturan, Berkas, File Explorer. "
-    "Buka tab baru, tutup tab, kembali, refresh halaman, klik kolom pencarian, ketik, tekan enter, "
-    "gerakkan kursor ke tengah layar, klik, klik kanan, scroll ke bawah, scroll ke atas, lihat layar gue. "
-    "Jam berapa sekarang? Sekarang jam berapa? Pukul berapa sekarang? Tanggal berapa hari ini? Hari apa sekarang? Waktu sekarang. "
-    "RAM, SSD, info sistem. Open Chrome, WhatsApp, Settings, What time is it, Take screenshot."
+    "JARVIS assistant. Percakapan dwibahasa Indonesia dan Inggris. "
+    "Music: Play Creep by Radiohead, Putar lagu Creep Radiohead, Bohemian Rhapsody by Queen, "
+    "Yellow by Coldplay, Nirvana, Adele, Taylor Swift, YouTube Music, Spotify. "
+    "Apps: Buka Chrome, Google Chrome, YouTube, Discord, WhatsApp, Notepad, Calculator, Settings, File Explorer. "
+    "Commands: Play it, pause music, resume playback, next track, take screenshot, volume up, volume down, info sistem."
 )
 
 WHISPER_HALLUCINATIONS = {
@@ -60,12 +59,21 @@ class SpeechToText:
         import os
         num_threads = min(6, os.cpu_count() or 4)
 
-        self._model = WhisperModel(
-            self.model_size,
-            device=self.device,
-            compute_type=self.compute_type,
-            cpu_threads=num_threads,
-        )
+        try:
+            self._model = WhisperModel(
+                self.model_size,
+                device=self.device,
+                compute_type=self.compute_type,
+                cpu_threads=num_threads,
+            )
+        except Exception as e:
+            logger.error("Failed to load faster-whisper model '%s': %s", self.model_size, e)
+            raise RuntimeError(
+                f"Gagal memuat model STT '{self.model_size}': {e}. "
+                "Pastikan koneksi internet aktif saat pertama kali mengunduh model, "
+                "atau setel JARVIS_STT_MODEL=base di berkas .env."
+            ) from e
+
         elapsed = time.time() - t0
         logger.info(
             "Whisper model '%s' loaded in %.2fs (threads=%d)",
@@ -102,24 +110,41 @@ class SpeechToText:
             audio = resample_audio(audio, orig_sr=sample_rate, target_sr=16000)
             sample_rate = 16000
 
-        audio = np.squeeze(audio).astype(np.float32)
+        # Convert to float32 and normalize int16 or unscaled audio to [-1.0, 1.0]
+        if np.issubdtype(audio.dtype, np.integer):
+            audio = np.squeeze(audio).astype(np.float32) / 32768.0
+        else:
+            audio = np.squeeze(audio).astype(np.float32)
+            if len(audio) > 0 and float(np.max(np.abs(audio))) > 1.5:
+                audio = audio / 32768.0
 
         duration = len(audio) / sample_rate
         if duration < 0.2:
             logger.debug("Audio duration too short (%.2fs), skipping transcription.", duration)
             return "", {"language": "", "language_prob": 0.0, "duration": duration, "peak": 0.0, "rms": 0.0, "transcription_time": 0.0}
 
+        # Step 1: DC-Offset filtering (removes microphone hardware ADC bias)
+        if len(audio) > 0:
+            audio = audio - float(np.mean(audio))
+
         max_amp = float(np.max(np.abs(audio))) if len(audio) > 0 else 0.0
         rms_amp = float(np.sqrt(np.mean(audio**2))) if len(audio) > 0 else 0.0
 
         # Pre-STT silence & ambient noise gate: rejects pure noise or silence before neural decoding
-        if max_amp < 0.005 or rms_amp < 0.0015:
+        if max_amp < 0.003 or rms_amp < 0.0008:
             logger.debug(
                 "Audio energy below threshold (peak=%.4f, rms=%.4f), rejecting as silence.",
                 max_amp,
                 rms_amp,
             )
             return "", {"language": "", "language_prob": 0.0, "duration": duration, "peak": max_amp, "rms": rms_amp, "transcription_time": 0.0}
+
+        # Step 2: Gentle peak normalization with soft limiter (avoids noise floor explosion)
+        if max_amp > 0.0001 and max_amp < 0.50:
+            gain = min(8.0, 0.70 / max(max_amp, 0.001))
+            audio = np.clip(audio * gain, -1.0, 1.0)
+            max_amp = float(np.max(np.abs(audio)))
+            rms_amp = float(np.sqrt(np.mean(audio**2)))
 
         if self._model is None:
             self.load_model()
@@ -130,9 +155,10 @@ class SpeechToText:
         t0 = time.time()
         detected_lang = eff_lang.lower() if not is_auto else None
 
-        # In auto mode, use feature-level detect_language to quickly distinguish id/en without running a 2nd text decoding pass
+        # In auto mode, use feature-level detect_language to distinguish pure id vs en,
+        # but do not force 'id' clamp on code-switching utterances so English words remain intact!
         if is_auto:
-            detected_lang = "id"
+            detected_lang = None
             try:
                 detect_res = self._model.detect_language(audio)
                 if isinstance(detect_res, (list, tuple)) and len(detect_res) == 3:
@@ -140,24 +166,26 @@ class SpeechToText:
                     probs_dict = dict(all_probs) if isinstance(all_probs, (list, tuple)) else {}
                     id_score = probs_dict.get("id", 0.0) + probs_dict.get("ms", 0.0)
                     en_score = probs_dict.get("en", 0.0)
-                    if id_score >= en_score:
-                        detected_lang = "id"
-                    elif en_score > 0.4:
+                    if en_score > 0.65 and en_score > id_score:
                         detected_lang = "en"
+                    elif id_score > 0.85 and en_score < 0.10:
+                        detected_lang = "id"
                     else:
-                        detected_lang = "id" if probe_lang in ("id", "ms") else probe_lang
+                        # Bilingual code-switching mode: do not clamp language token
+                        detected_lang = None
             except Exception as e:
-                logger.debug("Fast language detection error: %s, defaulting to id", e)
-                detected_lang = "id"
+                logger.debug("Fast language detection error: %s", e)
+                detected_lang = None
 
         prompt = initial_prompt or DEFAULT_INITIAL_PROMPT
         logger.info("[STT] Starting transcription (duration=%.2fs, lang_hint=%s, peak=%.4f, rms=%.4f)", duration, detected_lang, max_amp, rms_amp)
 
-        # 1. Primary transcription pass with VAD filtering and vocabulary priming
-        # VAD is trusted strictly: if VAD filters all frames, the audio is silence/noise.
+        # 1. Primary transcription pass with beam_size=2 and vocabulary priming
         segments, info = self._model.transcribe(
             audio,
-            beam_size=1,
+            beam_size=2,
+            best_of=2,
+            temperature=0.0,
             language=detected_lang,
             initial_prompt=prompt,
             condition_on_previous_text=False,
@@ -167,6 +195,11 @@ class SpeechToText:
 
         texts = [s.text.strip() for s in segments if s.text.strip()]
         transcription = " ".join(texts).strip()
+
+        # Clean abnormal Whisper comma stutter between words (e.g. 'Play, grip.' -> 'Play grip.')
+        if transcription:
+            import re
+            transcription = re.sub(r'(\b\w+),\s+(\w+\b)', r'\1 \2', transcription)
 
         # Filter out known Whisper hallucination phrases produced during near-silence
         clean_cand = transcription.strip().lower()

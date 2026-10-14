@@ -85,7 +85,7 @@ def test_action_interpretation_handles_clarification():
 
 
 def test_action_interpretation_network_mock():
-    interpreter = ActionInterpreter()
+    interpreter = ActionInterpreter(provider="ollama")
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {
@@ -100,3 +100,25 @@ def test_action_interpretation_network_mock():
         assert plan.intent == "web_search"
         assert plan.action == "search"
         assert plan.parameters.get("query") == "berita AI terbaru"
+
+
+def test_universal_browser_action_validation():
+    """Verifies that universal browser actions are recognized and allowlisted."""
+    interpreter = ActionInterpreter()
+    for act in ["search_google", "open_new_tab", "click_element", "fill_input", "scroll_page", "read_page", "open_source"]:
+        raw_json = f'{{"type": "action", "intent": "browser", "action": "{act}", "parameters": {{}}}}'
+        plan = interpreter.parse_and_validate_json(raw_json, "test browser action", 10.0)
+        assert plan.is_action is True
+        assert plan.intent == "browser"
+        assert plan.action == act
+
+
+def test_pronoun_resolution_followup_search():
+    """Verifies parsing of follow-up contextual command to open second search source."""
+    interpreter = ActionInterpreter()
+    raw_json = '{"type": "action", "intent": "browser", "action": "open_source", "parameters": {"index": 2}}'
+    plan = interpreter.parse_and_validate_json(raw_json, "buka hasil kedua", 15.0)
+    assert plan.is_action is True
+    assert plan.action == "open_source"
+    assert plan.parameters.get("index") == 2
+

@@ -54,6 +54,20 @@ class UIElement:
 
 
 @dataclass
+class IndexedUIElement:
+    """UI element tagged with an explicit integer index for Set-of-Marks visual referencing."""
+    index: int
+    name: str
+    control_type: str
+    center_x: int
+    center_y: int
+    rect: Tuple[int, int, int, int] = (0, 0, 0, 0)
+    is_focused: bool = False
+    is_enabled: bool = True
+    automation_id: str = ""
+
+
+@dataclass
 class TextRegion:
     """Recognized OCR text segment with bounding box and layout category."""
     text: str = ""
@@ -577,6 +591,66 @@ def find_element_by_reference(reference: str, observation: ScreenObservation) ->
             return buttons[0]
 
     return None
+
+
+def get_indexed_ui_elements(observation: Optional[ScreenObservation], max_elements: int = 25) -> List[IndexedUIElement]:
+    """Generates a 1-indexed list of interactive UI elements for precise Set-of-Marks grounding."""
+    if not observation or not observation.elements:
+        return []
+
+    indexed: List[IndexedUIElement] = []
+    INTERACTIVE_TYPES = {
+        "Edit", "Button", "TabItem", "Hyperlink", "MenuItem",
+        "SplitButton", "RadioButton", "CheckBox", "ComboBox", "ListItem"
+    }
+
+    curr_idx = 1
+    for el in observation.elements:
+        if (el.control_type in INTERACTIVE_TYPES or el.is_focused) and el.is_enabled:
+            if el.center_x > 0 and el.center_y > 0:
+                name_disp = el.name.strip() if el.name else (f"Input Field" if el.control_type == "Edit" else el.control_type)
+                indexed.append(
+                    IndexedUIElement(
+                        index=curr_idx,
+                        name=name_disp,
+                        control_type=el.control_type,
+                        center_x=el.center_x,
+                        center_y=el.center_y,
+                        rect=el.rect,
+                        is_focused=el.is_focused,
+                        is_enabled=el.is_enabled,
+                        automation_id=el.automation_id,
+                    )
+                )
+                curr_idx += 1
+                if len(indexed) >= max_elements:
+                    break
+    return indexed
+
+
+def format_indexed_screen_summary(observation: Optional[ScreenObservation], indexed_elements: List[IndexedUIElement]) -> str:
+    """Formats a compact, token-dense screen summary for low-latency LLM reasoning."""
+    if not observation:
+        return "Screen State: No active window or elements observed."
+
+    lines = [
+        f"Active Window: \"{observation.window_title}\" (Process: {observation.process_name})",
+        "Interactive Elements:"
+    ]
+    if indexed_elements:
+        for item in indexed_elements[:20]:
+            focus_mark = " [FOCUSED]" if item.is_focused else ""
+            lines.append(f"  [{item.index}] {item.control_type}: \"{item.name}\"{focus_mark}")
+    else:
+        lines.append("  (No direct interactive controls mapped)")
+
+    if observation.raw_text:
+        text_lines = [l.strip() for l in observation.raw_text.splitlines() if l.strip()]
+        if text_lines:
+            sample_txt = " | ".join(text_lines[:6])
+            lines.append(f"Screen Text Preview: {sample_txt}")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

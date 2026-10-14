@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from dotenv import load_dotenv
 
@@ -58,7 +58,7 @@ class Settings:
 
     # Local LLM Runtime (Ollama)
     llm_enabled: bool = field(
-        default_factory=lambda: _get_bool("JARVIS_LLM_ENABLED", False)
+        default_factory=lambda: _get_bool("JARVIS_LLM_ENABLED", True)
     )
     ollama_url: str = field(
         default_factory=lambda: os.getenv(
@@ -66,7 +66,7 @@ class Settings:
         ).rstrip("/")
     )
     model: str = field(
-        default_factory=lambda: os.getenv("JARVIS_MODEL", "qwen3:8b")
+        default_factory=lambda: os.getenv("JARVIS_MODEL", "qwen2.5:1.5b")
     )
     keep_alive: str = field(
         default_factory=lambda: os.getenv("JARVIS_KEEP_ALIVE", "15m")
@@ -80,7 +80,7 @@ class Settings:
 
     # Speech-to-Text (STT) Settings
     stt_model: str = field(
-        default_factory=lambda: os.getenv("JARVIS_STT_MODEL", "base")
+        default_factory=lambda: os.getenv("JARVIS_STT_MODEL", "small")
     )
     stt_device: str = field(
         default_factory=lambda: os.getenv("JARVIS_STT_DEVICE", "cpu")
@@ -131,14 +131,17 @@ class Settings:
     wake_word_model: str = field(
         default_factory=lambda: os.getenv("JARVIS_WAKE_WORD_MODEL", "hey_jarvis_v0.1.onnx")
     )
+    wake_word_aliases: List[str] = field(
+        default_factory=lambda: [w.strip().lower() for w in os.getenv("JARVIS_WAKE_WORD_ALIASES", "jarvis,jarpis").split(",") if w.strip()]
+    )
     wake_word_threshold: float = field(
-        default_factory=lambda: _get_float("JARVIS_WAKE_WORD_THRESHOLD", 0.5)
+        default_factory=lambda: _get_float("JARVIS_WAKE_WORD_THRESHOLD", 0.15)
     )
     wake_word_cooldown: float = field(
         default_factory=lambda: _get_float("JARVIS_WAKE_WORD_COOLDOWN", 1.5)
     )
     wake_word_vad_threshold: float = field(
-        default_factory=lambda: _get_float("JARVIS_WAKE_WORD_VAD_THRESHOLD", 0.5)
+        default_factory=lambda: _get_float("JARVIS_WAKE_WORD_VAD_THRESHOLD", 0.0)
     )
     wake_word_speech_start_grace: float = field(
         default_factory=lambda: _get_float(
@@ -162,9 +165,23 @@ class Settings:
         default_factory=lambda: _PROJECT_ROOT / "data" / "models" / "wakeword"
     )
 
+    # Search Provider Settings
+    search_provider: str = field(
+        default_factory=lambda: os.getenv("JARVIS_SEARCH_PROVIDER", "google").lower()
+    )
+    search_open_browser_tab: bool = field(
+        default_factory=lambda: _get_bool("JARVIS_SEARCH_OPEN_BROWSER_TAB", True)
+    )
+
     # Context Interpreter Settings (Layer B/C)
+    interpreter_provider: str = field(
+        default_factory=lambda: os.getenv("JARVIS_INTERPRETER_PROVIDER", "groq").lower()
+    )
+    groq_model: str = field(
+        default_factory=lambda: os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
+    )
     interpreter_timeout: float = field(
-        default_factory=lambda: _get_float("JARVIS_INTERPRETER_TIMEOUT", 3.5)
+        default_factory=lambda: _get_float("JARVIS_INTERPRETER_TIMEOUT", 8.0)
     )
     interpreter_temperature: float = field(
         default_factory=lambda: _get_float("JARVIS_INTERPRETER_TEMPERATURE", 0.1)
@@ -176,6 +193,11 @@ class Settings:
     )
     memory_enabled: bool = field(
         default_factory=lambda: _get_bool("JARVIS_MEMORY_ENABLED", False)
+    )
+
+    # Simulated User Agent (Voice E2E Testing)
+    groq_api_key: Optional[str] = field(
+        default_factory=lambda: os.getenv("GROQ_API_KEY")
     )
 
 

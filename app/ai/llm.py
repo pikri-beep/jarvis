@@ -95,6 +95,7 @@ class OllamaClient:
             "think": eff_think,
             "options": {
                 "temperature": temperature if temperature is not None else self.temperature,
+                "num_predict": 85,  # Concise spoken limit: 2-3 sentences max (~3-4s generation)
             },
         }
 

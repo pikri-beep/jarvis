@@ -189,7 +189,7 @@ def generate_diagnostics_report(orchestrator: Any) -> Dict[str, Any]:
             "tts_loaded_voices": list(tts._voices.keys()) if tts else [],
         },
         "search_first": {
-            "provider": "Bing Web Search (Primary) + Wikipedia OpenSearch (Fallback)",
+            "provider": "Google Web Search (Primary) + Wikipedia OpenSearch (Fallback)",
             "llm_bypassed": True,
             "last_query": last_search.get("query", "None"),
             "results_count": len(last_search.get("sources", [])),
@@ -251,7 +251,7 @@ def format_diagnostics_text(diag: Dict[str, Any]) -> str:
         f"              TTS: ID={v['tts_model_id']} | EN={v['tts_model_en']}",
         f"              TTS Loaded Voices: {v['tts_loaded_voices']}",
         "-" * 66,
-        f" [Search-1st] Provider: {sf.get('provider', 'Bing Web Search')}",
+        f" [Search-1st] Provider: {sf.get('provider', 'Google Web Search')}",
         f"              LLM Bypassed: {sf.get('llm_bypassed', True)} (Extractive 1-2 sentence)",
         f"              Last Query: {sf.get('last_query', 'None')}",
         f"              Sources Retrieved: {sf.get('results_count', 0)} ({', '.join(sf.get('sources', [])) or 'None'})",

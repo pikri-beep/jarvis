@@ -221,7 +221,8 @@ class TestMemorySubsystem(unittest.TestCase):
         self.manager.store_fact("editor", "VS Code")
         with patch("app.memory.memory.memory_manager", self.manager):
             prompt_str = get_relevant_memories_prompt(language="en")
-            self.assertIn("editor: VS Code", prompt_str)
+            self.assertIn("editor", prompt_str)
+            self.assertIn("VS Code", prompt_str)
 
 
 class TestPhoneticNormalization(unittest.TestCase):

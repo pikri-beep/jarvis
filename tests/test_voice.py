@@ -89,3 +89,39 @@ def test_push_to_talk_recorder_lifecycle():
             assert metrics["chunks_count"] == 1
             assert "peak" in metrics
             assert "rms" in metrics
+
+
+def test_stt_model_default_is_small():
+    stt = SpeechToText()
+    assert stt.model_size == "small"
+
+
+def test_stt_dc_offset_removal_and_beam_size_2():
+    stt = SpeechToText()
+    mock_model = MagicMock()
+    mock_segment = MagicMock()
+    mock_segment.text = "Play Creep Radiohead"
+    mock_info = MagicMock()
+    mock_info.language = "en"
+    mock_info.language_probability = 0.95
+
+    mock_model.transcribe.return_value = ([mock_segment], mock_info)
+    stt._model = mock_model
+
+    # Audio with DC bias of +0.30
+    biased_audio = (np.sin(np.linspace(0, 50, 16000)).astype(np.float32) * 0.2) + 0.30
+    text, info = stt.transcribe(biased_audio)
+
+    assert text == "Play Creep Radiohead"
+    # Verify beam_size=2 was passed to model.transcribe
+    call_kwargs = mock_model.transcribe.call_args.kwargs
+    assert call_kwargs.get("beam_size") == 2
+    assert call_kwargs.get("best_of") == 2
+
+
+def test_stt_load_model_error_handling():
+    stt = SpeechToText()
+    with patch("faster_whisper.WhisperModel", side_effect=Exception("Model file not found")):
+        with pytest.raises(RuntimeError, match="Gagal memuat model STT"):
+            stt.load_model()
+

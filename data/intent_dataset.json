@@ -1,0 +1,862 @@
+[
+  {
+    "text": "buka chrome",
+    "intent": "open_app",
+    "target": "chrome"
+  },
+  {
+    "text": "gas buka chrome",
+    "intent": "open_app",
+    "target": "chrome"
+  },
+  {
+    "text": "kuy buka chrome dong",
+    "intent": "open_app",
+    "target": "chrome"
+  },
+  {
+    "text": "buka peramban chrome",
+    "intent": "open_app",
+    "target": "chrome"
+  },
+  {
+    "text": "nyalain google chrome",
+    "intent": "open_app",
+    "target": "chrome"
+  },
+  {
+    "text": "tolong jalankan chrome",
+    "intent": "open_app",
+    "target": "chrome"
+  },
+  {
+    "text": "open chrome",
+    "intent": "open_app",
+    "target": "chrome"
+  },
+  {
+    "text": "launch google chrome",
+    "intent": "open_app",
+    "target": "chrome"
+  },
+  {
+    "text": "start chrome browser",
+    "intent": "open_app",
+    "target": "chrome"
+  },
+  {
+    "text": "buka spotify",
+    "intent": "open_app",
+    "target": "spotify"
+  },
+  {
+    "text": "gas buka spotify",
+    "intent": "open_app",
+    "target": "spotify"
+  },
+  {
+    "text": "nyalain spotify dong",
+    "intent": "open_app",
+    "target": "spotify"
+  },
+  {
+    "text": "bukain aplikasi spotify",
+    "intent": "open_app",
+    "target": "spotify"
+  },
+  {
+    "text": "open spotify",
+    "intent": "open_app",
+    "target": "spotify"
+  },
+  {
+    "text": "launch spotify app",
+    "intent": "open_app",
+    "target": "spotify"
+  },
+  {
+    "text": "buka notepad",
+    "intent": "open_app",
+    "target": "notepad"
+  },
+  {
+    "text": "jalankan catatan notepad",
+    "intent": "open_app",
+    "target": "notepad"
+  },
+  {
+    "text": "tolong buka notepad",
+    "intent": "open_app",
+    "target": "notepad"
+  },
+  {
+    "text": "open notepad",
+    "intent": "open_app",
+    "target": "notepad"
+  },
+  {
+    "text": "launch notepad",
+    "intent": "open_app",
+    "target": "notepad"
+  },
+  {
+    "text": "buka kalkulator",
+    "intent": "open_app",
+    "target": "calculator"
+  },
+  {
+    "text": "tolong bukain kalkulator",
+    "intent": "open_app",
+    "target": "calculator"
+  },
+  {
+    "text": "nyalain kalku",
+    "intent": "open_app",
+    "target": "calculator"
+  },
+  {
+    "text": "open calculator",
+    "intent": "open_app",
+    "target": "calculator"
+  },
+  {
+    "text": "buka vscode",
+    "intent": "open_app",
+    "target": "vscode"
+  },
+  {
+    "text": "jalankan visual studio code",
+    "intent": "open_app",
+    "target": "vscode"
+  },
+  {
+    "text": "open code editor",
+    "intent": "open_app",
+    "target": "vscode"
+  },
+  {
+    "text": "buka whatsapp",
+    "intent": "open_app",
+    "target": "whatsapp"
+  },
+  {
+    "text": "bukain wa dong",
+    "intent": "open_app",
+    "target": "whatsapp"
+  },
+  {
+    "text": "open whatsapp desktop",
+    "intent": "open_app",
+    "target": "whatsapp"
+  },
+  {
+    "text": "buka excel",
+    "intent": "open_app",
+    "target": "excel"
+  },
+  {
+    "text": "jalankan ms excel",
+    "intent": "open_app",
+    "target": "excel"
+  },
+  {
+    "text": "open excel",
+    "intent": "open_app",
+    "target": "excel"
+  },
+  {
+    "text": "buka word",
+    "intent": "open_app",
+    "target": "word"
+  },
+  {
+    "text": "jalankan ms word",
+    "intent": "open_app",
+    "target": "word"
+  },
+  {
+    "text": "open microsoft word",
+    "intent": "open_app",
+    "target": "word"
+  },
+  {
+    "text": "buka discord",
+    "intent": "open_app",
+    "target": "discord"
+  },
+  {
+    "text": "nyalain discord",
+    "intent": "open_app",
+    "target": "discord"
+  },
+  {
+    "text": "open discord",
+    "intent": "open_app",
+    "target": "discord"
+  },
+  {
+    "text": "tutup chrome",
+    "intent": "close_app",
+    "target": "chrome"
+  },
+  {
+    "text": "matiin chrome dong",
+    "intent": "close_app",
+    "target": "chrome"
+  },
+  {
+    "text": "keluar dari google chrome",
+    "intent": "close_app",
+    "target": "chrome"
+  },
+  {
+    "text": "hentikan peramban chrome",
+    "intent": "close_app",
+    "target": "chrome"
+  },
+  {
+    "text": "close chrome",
+    "intent": "close_app",
+    "target": "chrome"
+  },
+  {
+    "text": "quit chrome browser",
+    "intent": "close_app",
+    "target": "chrome"
+  },
+  {
+    "text": "kill chrome process",
+    "intent": "close_app",
+    "target": "chrome"
+  },
+  {
+    "text": "tutup spotify",
+    "intent": "close_app",
+    "target": "spotify"
+  },
+  {
+    "text": "matiin spotify dong",
+    "intent": "close_app",
+    "target": "spotify"
+  },
+  {
+    "text": "keluar dari spotify",
+    "intent": "close_app",
+    "target": "spotify"
+  },
+  {
+    "text": "close spotify",
+    "intent": "close_app",
+    "target": "spotify"
+  },
+  {
+    "text": "tutup notepad",
+    "intent": "close_app",
+    "target": "notepad"
+  },
+  {
+    "text": "matiin notepad",
+    "intent": "close_app",
+    "target": "notepad"
+  },
+  {
+    "text": "close notepad",
+    "intent": "close_app",
+    "target": "notepad"
+  },
+  {
+    "text": "tutup kalkulator",
+    "intent": "close_app",
+    "target": "calculator"
+  },
+  {
+    "text": "close calculator",
+    "intent": "close_app",
+    "target": "calculator"
+  },
+  {
+    "text": "tutup whatsapp",
+    "intent": "close_app",
+    "target": "whatsapp"
+  },
+  {
+    "text": "close wa",
+    "intent": "close_app",
+    "target": "whatsapp"
+  },
+  {
+    "text": "tutup vscode",
+    "intent": "close_app",
+    "target": "vscode"
+  },
+  {
+    "text": "close vscode",
+    "intent": "close_app",
+    "target": "vscode"
+  },
+  {
+    "text": "buka youtube",
+    "intent": "open_website",
+    "target": "youtube"
+  },
+  {
+    "text": "gas ke youtube",
+    "intent": "open_website",
+    "target": "youtube"
+  },
+  {
+    "text": "tolong bukain youtube",
+    "intent": "open_website",
+    "target": "youtube"
+  },
+  {
+    "text": "kuy nonton youtube",
+    "intent": "open_website",
+    "target": "youtube"
+  },
+  {
+    "text": "open youtube website",
+    "intent": "open_website",
+    "target": "youtube"
+  },
+  {
+    "text": "go to youtube",
+    "intent": "open_website",
+    "target": "youtube"
+  },
+  {
+    "text": "buka situs google",
+    "intent": "open_website",
+    "target": "google"
+  },
+  {
+    "text": "buka github",
+    "intent": "open_website",
+    "target": "github"
+  },
+  {
+    "text": "kunjungi github",
+    "intent": "open_website",
+    "target": "github"
+  },
+  {
+    "text": "buka reddit",
+    "intent": "open_website",
+    "target": "reddit"
+  },
+  {
+    "text": "buka wikipedia",
+    "intent": "open_website",
+    "target": "wikipedia"
+  },
+  {
+    "text": "putar musik",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "puter lagunya",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "setel musiknya dong",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "lanjutkan lagunya",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "jeda musiknya",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "pause lagunya",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "pause musik",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "resume musik",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "play the song",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "pause playback",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "resume playback",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "mainkan musik",
+    "intent": "media_play_pause",
+    "target": ""
+  },
+  {
+    "text": "ganti lagu berikutnya",
+    "intent": "media_next",
+    "target": ""
+  },
+  {
+    "text": "lagu selanjutnya dong",
+    "intent": "media_next",
+    "target": ""
+  },
+  {
+    "text": "skip lagu ini",
+    "intent": "media_next",
+    "target": ""
+  },
+  {
+    "text": "trek berikutnya",
+    "intent": "media_next",
+    "target": ""
+  },
+  {
+    "text": "next track please",
+    "intent": "media_next",
+    "target": ""
+  },
+  {
+    "text": "skip this song",
+    "intent": "media_next",
+    "target": ""
+  },
+  {
+    "text": "pindah ke lagu selanjutnya",
+    "intent": "media_next",
+    "target": ""
+  },
+  {
+    "text": "stop musiknya",
+    "intent": "media_stop",
+    "target": ""
+  },
+  {
+    "text": "hentikan lagu",
+    "intent": "media_stop",
+    "target": ""
+  },
+  {
+    "text": "stop the music",
+    "intent": "media_stop",
+    "target": ""
+  },
+  {
+    "text": "besarin volume",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "naikkan suara laptop",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "volumenya kurang kenceng",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "kencengin suaranya dong",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "tambah volume",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "naikin audio",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "turn up the volume",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "make it louder",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "increase audio volume",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "kecilkan volume",
+    "intent": "volume_down",
+    "target": ""
+  },
+  {
+    "text": "turunkan suara",
+    "intent": "volume_down",
+    "target": ""
+  },
+  {
+    "text": "pelanin suaranya dong",
+    "intent": "volume_down",
+    "target": ""
+  },
+  {
+    "text": "volumenya kekencengan",
+    "intent": "volume_down",
+    "target": ""
+  },
+  {
+    "text": "kurangi volume",
+    "intent": "volume_down",
+    "target": ""
+  },
+  {
+    "text": "turunin audio",
+    "intent": "volume_down",
+    "target": ""
+  },
+  {
+    "text": "turn down the volume",
+    "intent": "volume_down",
+    "target": ""
+  },
+  {
+    "text": "make it quieter",
+    "intent": "volume_down",
+    "target": ""
+  },
+  {
+    "text": "lower audio volume",
+    "intent": "volume_down",
+    "target": ""
+  },
+  {
+    "text": "senyapkan audio",
+    "intent": "toggle_mute",
+    "target": ""
+  },
+  {
+    "text": "bisu suaranya",
+    "intent": "toggle_mute",
+    "target": ""
+  },
+  {
+    "text": "mute audio",
+    "intent": "toggle_mute",
+    "target": ""
+  },
+  {
+    "text": "unmute audio",
+    "intent": "toggle_mute",
+    "target": ""
+  },
+  {
+    "text": "matikan suara komputer",
+    "intent": "toggle_mute",
+    "target": ""
+  },
+  {
+    "text": "silence the sound",
+    "intent": "toggle_mute",
+    "target": ""
+  },
+  {
+    "text": "ambil screenshot",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "tangkap layar laptop",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "ss layarku",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "ss layar komputer",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "ss layarku dong",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "capture layar komputer",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "tolong foto layar",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "take a screenshot",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "capture screen now",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "grab screenshot",
+    "intent": "take_screenshot",
+    "target": ""
+  },
+  {
+    "text": "kunci komputer",
+    "intent": "lock_screen",
+    "target": ""
+  },
+  {
+    "text": "gembok layarnya dong",
+    "intent": "lock_screen",
+    "target": ""
+  },
+  {
+    "text": "kunci layar laptop",
+    "intent": "lock_screen",
+    "target": ""
+  },
+  {
+    "text": "lock my pc",
+    "intent": "lock_screen",
+    "target": ""
+  },
+  {
+    "text": "lock the computer",
+    "intent": "lock_screen",
+    "target": ""
+  },
+  {
+    "text": "amankan windows",
+    "intent": "lock_screen",
+    "target": ""
+  },
+  {
+    "text": "jam berapa sekarang",
+    "intent": "get_time",
+    "target": ""
+  },
+  {
+    "text": "sekarang jam brapa nih",
+    "intent": "get_time",
+    "target": ""
+  },
+  {
+    "text": "pukul berapa ini",
+    "intent": "get_time",
+    "target": ""
+  },
+  {
+    "text": "info waktu saat ini",
+    "intent": "get_time",
+    "target": ""
+  },
+  {
+    "text": "what time is it now",
+    "intent": "get_time",
+    "target": ""
+  },
+  {
+    "text": "tell me the current time",
+    "intent": "get_time",
+    "target": ""
+  },
+  {
+    "text": "hari ini tanggal berapa",
+    "intent": "get_date",
+    "target": ""
+  },
+  {
+    "text": "sekarang tanggal brapa",
+    "intent": "get_date",
+    "target": ""
+  },
+  {
+    "text": "hari ini hari apa",
+    "intent": "get_date",
+    "target": ""
+  },
+  {
+    "text": "info tanggal hari ini",
+    "intent": "get_date",
+    "target": ""
+  },
+  {
+    "text": "what is today date",
+    "intent": "get_date",
+    "target": ""
+  },
+  {
+    "text": "what day is it today",
+    "intent": "get_date",
+    "target": ""
+  },
+  {
+    "text": "cek spesifikasi pc",
+    "intent": "system_info",
+    "target": ""
+  },
+  {
+    "text": "status sistem komputer",
+    "intent": "system_info",
+    "target": ""
+  },
+  {
+    "text": "info spek laptop",
+    "intent": "system_info",
+    "target": ""
+  },
+  {
+    "text": "bagaimana kondisi ram dan cpu",
+    "intent": "system_info",
+    "target": ""
+  },
+  {
+    "text": "check system specs",
+    "intent": "system_info",
+    "target": ""
+  },
+  {
+    "text": "show pc hardware info",
+    "intent": "system_info",
+    "target": ""
+  },
+  {
+    "text": "sisa baterai berapa",
+    "intent": "battery_status",
+    "target": ""
+  },
+  {
+    "text": "cek baterai laptop",
+    "intent": "battery_status",
+    "target": ""
+  },
+  {
+    "text": "berapa persen baterai",
+    "intent": "battery_status",
+    "target": ""
+  },
+  {
+    "text": "status baterai sekarang",
+    "intent": "battery_status",
+    "target": ""
+  },
+  {
+    "text": "how much battery left",
+    "intent": "battery_status",
+    "target": ""
+  },
+  {
+    "text": "check battery percentage",
+    "intent": "battery_status",
+    "target": ""
+  },
+  {
+    "text": "buka tab baru",
+    "intent": "open_new_tab",
+    "target": ""
+  },
+  {
+    "text": "bikin tab baru di browser",
+    "intent": "open_new_tab",
+    "target": ""
+  },
+  {
+    "text": "tambah tab baru",
+    "intent": "open_new_tab",
+    "target": ""
+  },
+  {
+    "text": "open a new tab",
+    "intent": "open_new_tab",
+    "target": ""
+  },
+  {
+    "text": "create new tab",
+    "intent": "open_new_tab",
+    "target": ""
+  },
+  {
+    "text": "tutup tab ini",
+    "intent": "close_tab",
+    "target": ""
+  },
+  {
+    "text": "close tab sekarang",
+    "intent": "close_tab",
+    "target": ""
+  },
+  {
+    "text": "close this browser tab",
+    "intent": "close_tab",
+    "target": ""
+  },
+  {
+    "text": "cari resep rendang di google",
+    "intent": "search_web",
+    "target": "resep rendang"
+  },
+  {
+    "text": "googling cara merakit pc",
+    "intent": "search_web",
+    "target": "cara merakit pc"
+  },
+  {
+    "text": "carikan informasi tentang ikn",
+    "intent": "search_web",
+    "target": "informasi tentang ikn"
+  },
+  {
+    "text": "cari di web tentang cuaca bandung",
+    "intent": "search_web",
+    "target": "cuaca bandung"
+  },
+  {
+    "text": "search google for python tutorial",
+    "intent": "search_web",
+    "target": "python tutorial"
+  },
+  {
+    "text": "look up quantum physics on google",
+    "intent": "search_web",
+    "target": "quantum physics"
+  },
+  {
+    "text": "googling berita terkini",
+    "intent": "search_web",
+    "target": "berita terkini"
+  },
+  {
+    "text": "googling resep maknan",
+    "intent": "search_web",
+    "target": "resep maknan"
+  }
+]

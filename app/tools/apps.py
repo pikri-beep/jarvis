@@ -8,6 +8,7 @@ Follows AGENTS.md security guidelines:
 - Never sends messages or automated commands through communication apps (e.g. WhatsApp).
 """
 
+import difflib
 import os
 import shutil
 import subprocess
@@ -48,6 +49,57 @@ class AppRegistry:
 
         for alias in app.aliases:
             self._alias_map[alias.strip().lower()] = app.canonical_name
+
+    def register_alias(self, alias: str, canonical_name: str) -> bool:
+        """Dynamically registers an alias for an existing canonical application."""
+        clean_alias = alias.strip().lower()
+        clean_canon = canonical_name.strip().lower()
+        if not clean_alias or clean_canon not in self._apps:
+            return False
+        self._alias_map[clean_alias] = clean_canon
+        app = self._apps[clean_canon]
+        if clean_alias not in [a.lower() for a in app.aliases]:
+            app.aliases.append(clean_alias)
+        logger.info("Registered dynamic application alias '%s' -> '%s'", clean_alias, clean_canon)
+        return True
+
+    def find_fuzzy_matches(self, query: str, cutoff: float = 0.55) -> List[Tuple[str, str, float]]:
+        """Finds closest registered application candidates based on string similarity.
+
+        Returns:
+            List of (canonical_name, display_name, score) sorted by score descending.
+        """
+        if not query:
+            return []
+        q = query.strip().lower()
+        best_per_app: Dict[str, Tuple[str, float]] = {}
+
+        for canonical, app in self._apps.items():
+            candidates = [canonical, app.display_name.lower()] + [a.lower() for a in app.aliases]
+            max_s = 0.0
+            for cand in candidates:
+                cand_lower = cand.strip().lower()
+                is_sub = False
+                if len(cand_lower) >= 4 and cand_lower in q:
+                    is_sub = True
+                elif len(q) >= 4 and q in cand_lower:
+                    is_sub = True
+                elif cand_lower in q.split() or q in cand_lower.split():
+                    is_sub = True
+
+                if is_sub:
+                    sub_ratio = len(min(q, cand_lower, key=len)) / max(len(q), len(cand_lower), 1)
+                    s = max(difflib.SequenceMatcher(None, q, cand_lower).ratio(), 0.6 + 0.35 * sub_ratio)
+                else:
+                    s = difflib.SequenceMatcher(None, q, cand_lower).ratio()
+                if s > max_s:
+                    max_s = s
+            if max_s >= cutoff:
+                best_per_app[canonical] = (app.display_name, max_s)
+
+        results = [(can, name, score) for can, (name, score) in best_per_app.items()]
+        results.sort(key=lambda x: x[2], reverse=True)
+        return results
 
     def get(self, name: str) -> Optional[AppDefinition]:
         """Retrieves an application definition by canonical name or alias."""
@@ -291,6 +343,29 @@ class AppRegistry:
             )
         )
 
+        # 15. Discord
+        discord_exes = []
+        try:
+            import glob
+            for d_p in glob.glob(os.path.expandvars(r"%LOCALAPPDATA%\Discord\app-*\Discord.exe")):
+                discord_exes.append(Path(d_p))
+        except Exception:
+            pass
+        discord_exes.append(Path(os.path.expandvars(r"%LOCALAPPDATA%\Discord\Update.exe")))
+
+        self.register(
+            AppDefinition(
+                canonical_name="discord",
+                display_name="Discord",
+                protocol_uri="discord:",
+                known_exes=discord_exes,
+                process_names=["Discord.exe"],
+                aliases=[
+                    "discord", "diskord", "aplikasi discord", "chat discord"
+                ],
+            )
+        )
+
 
 # Global registry singleton
 registry = AppRegistry()
@@ -315,6 +390,16 @@ def is_protocol_registered(protocol_scheme: str) -> bool:
 
 def find_application_executable(canonical_name: str) -> Optional[Path]:
     """Finds the absolute executable path for an application."""
+    # Dynamic check for Discord versioned path
+    if canonical_name == "discord":
+        try:
+            import glob
+            for d_p in glob.glob(os.path.expandvars(r"%LOCALAPPDATA%\Discord\app-*\Discord.exe")):
+                if Path(d_p).exists():
+                    return Path(d_p)
+        except Exception:
+            pass
+
     app = registry.get(canonical_name)
 
     # 1. Check known explicit paths
@@ -350,7 +435,87 @@ def find_application_executable(canonical_name: str) -> Optional[Path]:
     except ImportError:
         pass
 
+    # 4. Check Windows Start Menu shortcuts
+    lnk_match = scan_start_menu_apps(canonical_name)
+    if lnk_match:
+        return lnk_match[1]
+
     return None
+
+
+def scan_start_menu_apps(query: str) -> Optional[Tuple[str, Path]]:
+    """Scans Windows Start Menu shortcut (.lnk) files for non-registered applications.
+
+    Returns:
+        Tuple of (display_name, shortcut_or_exe_path) if found, else None.
+    """
+    if not query or len(query) < 2:
+        return None
+    q = query.strip().lower()
+
+    search_roots = [
+        Path(os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs")),
+        Path(os.path.expandvars(r"%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs")),
+    ]
+
+    best_match: Optional[Tuple[str, Path, float]] = None
+
+    for root in search_roots:
+        if not root.exists():
+            continue
+        try:
+            for item in root.rglob("*.lnk"):
+                stem = item.stem.lower()
+                # Exclude uninstallers, help docs, and web links
+                if any(bad in stem for bad in ["uninstall", "remove", "help", "readme", "bantuan", "setup"]):
+                    continue
+                score = difflib.SequenceMatcher(None, q, stem).ratio()
+                if q in stem or stem in q:
+                    sub_ratio = len(min(q, stem, key=len)) / max(len(q), len(stem), 1)
+                    score = max(score, 0.6 + 0.35 * sub_ratio)
+                if score >= 0.65:
+                    if best_match is None or score > best_match[2]:
+                        best_match = (item.stem, item, score)
+        except Exception as exc:
+            logger.debug("Error scanning Start Menu path %s: %s", root, exc)
+
+    if best_match:
+        return best_match[0], best_match[1]
+    return None
+
+
+def find_best_app_or_site_candidate(query: str, cutoff: float = 0.55) -> Optional[Tuple[str, str, str, float]]:
+    """Finds the closest application or website candidate for a spoken/typed query.
+
+    Returns:
+        Tuple of (target_type, canonical_name, display_name, score) where target_type is 'app' or 'website',
+        or None if no candidate exceeds cutoff.
+    """
+    if not query:
+        return None
+
+    # 1. Check Apps
+    app_matches = registry.find_fuzzy_matches(query, cutoff=cutoff)
+    best_app = app_matches[0] if app_matches else None
+
+    # 2. Check Websites
+    from app.tools.browser import website_registry
+    site_matches = website_registry.find_fuzzy_matches(query, cutoff=cutoff)
+    best_site = site_matches[0] if site_matches else None
+
+    if not best_app and not best_site:
+        return None
+
+    if best_app and not best_site:
+        return "app", best_app[0], best_app[1], best_app[2]
+    if best_site and not best_app:
+        return "website", best_site[0], best_site[1], best_site[2]
+
+    # Both found: pick higher score
+    if best_app[2] >= best_site[2]:
+        return "app", best_app[0], best_app[1], best_app[2]
+    else:
+        return "website", best_site[0], best_site[1], best_site[2]
 
 
 def launch_application(raw_name: str) -> Tuple[bool, str, str]:
@@ -374,6 +539,11 @@ def launch_application(raw_name: str) -> Tuple[bool, str, str]:
 
     if exe_path is not None:
         try:
+            if str(exe_path).lower().endswith(".lnk"):
+                os.startfile(str(exe_path))
+                logger.info("Successfully launched application shortcut '%s' at %s", canonical, exe_path)
+                return True, display_name, f"Berhasil membuka {display_name}."
+
             # Special Security Guard for WhatsApp: Ensure bare executable execution only (no parameters)
             cmd_args = [str(exe_path)]
 
@@ -410,6 +580,13 @@ def launch_application(raw_name: str) -> Tuple[bool, str, str]:
             except Exception as e:
                 logger.error("Error activating protocol '%s' for '%s': %s", app.protocol_uri, canonical, e)
                 return False, display_name, f"Gagal membuka {display_name} melalui protokol sistem: {e}"
+
+    # Step B.5: Fallback to registered web application if applicable (e.g. Gemini, Claude, ChatGPT, YouTube)
+    from app.tools.browser import is_known_website, launch_website
+    if is_known_website(canonical) or is_known_website(raw_name):
+        logger.info("Application '%s' resolved to web application, launching in browser", canonical)
+        ok_w, _, d_name, msg_w = launch_website(canonical or raw_name)
+        return ok_w, d_name, msg_w
 
     # Step C: Honest reporting when application is absent or unsupported
     logger.warning("Application '%s' (raw: '%s') is not installed or registered", canonical, raw_name)

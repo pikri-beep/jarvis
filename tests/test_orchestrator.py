@@ -69,3 +69,40 @@ def test_orchestrator_llm_flow():
     assert len(orchestrator.state.history) == 2
     assert orchestrator.state.history[0].role == "user"
     assert orchestrator.state.history[1].role == "assistant"
+
+
+def test_orchestrator_clarification_follow_up_open():
+    orchestrator = Orchestrator()
+    # Turn 1: Incomplete command "buka" triggers clarification
+    route1, stream1 = orchestrator.process_input_stream("buka")
+    assert route1.route_type == RouteType.CLARIFY
+    out1 = "".join(list(stream1))
+    assert "Aplikasi atau situs apa" in out1
+    assert orchestrator.state.pending_action is not None
+    assert orchestrator.state.pending_action.action == "clarify_open"
+
+    # Turn 2: Follow-up answer "chrome" resolves cleanly without repeating "buka"
+    with patch("app.tools.apps.launch_application", return_value=(True, "Google Chrome", "Berhasil")):
+        route2, stream2 = orchestrator.process_input_stream("chrome")
+        assert route2.route_type == RouteType.FAST_COMMAND
+        out2 = "".join(list(stream2))
+        assert "Membuka Google Chrome, sir." in out2
+        assert orchestrator.state.pending_action is None
+
+
+def test_orchestrator_clarification_follow_up_cancellation():
+    orchestrator = Orchestrator()
+    # Turn 1: Ambiguous close command "tutup"
+    route1, stream1 = orchestrator.process_input_stream("tutup")
+    assert route1.route_type == RouteType.CLARIFY
+    out1 = "".join(list(stream1))
+    assert "Aplikasi apa yang ingin Anda tutup" in out1
+    assert orchestrator.state.pending_action is not None
+    assert orchestrator.state.pending_action.action == "clarify_close"
+
+    # Turn 2: User cancels with "batal"
+    route2, stream2 = orchestrator.process_input_stream("batal")
+    assert route2.route_type == RouteType.FAST_COMMAND
+    out2 = "".join(list(stream2))
+    assert "dibatalkan" in out2
+    assert orchestrator.state.pending_action is None

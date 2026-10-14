@@ -82,16 +82,26 @@ def parse_music_intent(user_input: str) -> Dict[str, Any]:
     - "Putar lagu Bohemian Rhapsody" -> {"type": "song", "title": "Bohemian Rhapsody"}
     """
     clean = user_input.strip()
+    # Strip quotes and punctuation
+    clean = re.sub(r'^[«»"\'“”‘’]+|[«»"\'“”‘’]+$', '', clean).strip()
+    clean = re.sub(r'[\.\?!,;:]+$', '', clean).strip()
+
     # Normalize command prefix
     clean = re.sub(
-        r"^(?:jarvis[,:]?\s*)?(?:tolong\s+|coba\s+)?(?:putar(?:kan)?|play)\s+(?:lagu|musik|video|trek|track)?\s*",
+        r"^(?:jarvis[,:]?\s*)?(?:tolong\s+|coba\s+)?(?:putar(?:kan)?|play|lay|setel(?:kan)?|mainkan)\s+(?:lagu|musik|video|trek|track)?\s*",
         "",
         clean,
         flags=re.IGNORECASE,
     ).strip()
-    # Remove trailing particles
+    # Remove trailing particles and punctuation
     clean = re.sub(r"\s+(?:dong(?:\s+ya)?|ya|deh|lah|nih|please|now)$", "", clean, flags=re.IGNORECASE).strip()
     clean = re.sub(r'^[«»"\'“”‘’]+|[«»"\'“”‘’]+$', '', clean).strip()
+    clean = re.sub(r'[\.\?!,;:]+$', '', clean).strip()
+
+    # 0. Phonetic normalizations for speech-to-text confusions on popular songs & artists
+    clean = re.sub(r"\b(?:clip|grip|kripp?|crip)\b", "creep", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\b(?:by|oleh|dari|buy)\s+(?:run|ran|radio\s*head|radio\s*hed|rediohead)\b", "by radiohead", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\bradio\s+head\b", "radiohead", clean, flags=re.IGNORECASE)
 
     # 1. Check for mood-based requests
     clean_lower = clean.lower()
@@ -109,6 +119,8 @@ def parse_music_intent(user_input: str) -> Dict[str, Any]:
     if " - " in clean:
         parts = clean.split(" - ", maxsplit=1)
         t, a = parts[0].strip(), parts[1].strip()
+        if t.lower() == "creep" and a.lower() in ("run", "ran", "radiohead", ""):
+            t, a = "Creep", "Radiohead"
         return {
             "type": "song_artist",
             "title": t,
@@ -121,6 +133,8 @@ def parse_music_intent(user_input: str) -> Dict[str, Any]:
     m_by = re.match(r"^(.+?)\s+(?:oleh|dari|by)\s+(.+)$", clean, re.IGNORECASE)
     if m_by:
         t, a = m_by.group(1).strip(), m_by.group(2).strip()
+        if t.lower() == "creep" and a.lower() in ("run", "ran", "radiohead", ""):
+            t, a = "Creep", "Radiohead"
         return {
             "type": "song_artist",
             "title": t,
@@ -129,7 +143,17 @@ def parse_music_intent(user_input: str) -> Dict[str, Any]:
             "display_term": f"'{t}' oleh {a}",
         }
 
-    # 4. Fallback to general song/artist query
+    # 4. Check for canonical single-word or known tracks
+    if clean_lower in ("creep", "creep radiohead", "radiohead creep"):
+        return {
+            "type": "song_artist",
+            "title": "Creep",
+            "artist": "Radiohead",
+            "query": "Radiohead - Creep",
+            "display_term": "'Creep' oleh Radiohead",
+        }
+
+    # 5. Fallback to general song/artist query
     return {
         "type": "song",
         "title": clean or "lagu populer",

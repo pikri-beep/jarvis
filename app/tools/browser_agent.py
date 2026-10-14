@@ -117,19 +117,45 @@ def extract_domain(url: str) -> str:
         return ""
 
 
-def unwrap_bing_url(url: str) -> str:
-    """Decodes Bing redirect tracking URL to retrieve the actual destination URL."""
-    m = re.search(r"[?&]u=a1([a-zA-Z0-9_\-]+)", url)
+def unwrap_google_url(url: str) -> str:
+    """Decodes Google redirect tracking URL to retrieve the actual destination URL."""
+    if not url:
+        return ""
+    m = re.search(r"[?&]q=(https?://[^&]+)", url)
     if m:
-        b64 = m.group(1).replace("-", "+").replace("_", "/")
-        b64 += "=" * ((4 - len(b64) % 4) % 4)
         try:
-            decoded = base64.b64decode(b64).decode("utf-8", errors="ignore")
-            if decoded.startswith(("http://", "https://")):
-                return decoded
+            return urllib.parse.unquote(m.group(1))
+        except Exception:
+            return m.group(1)
+    return url
+
+
+def unwrap_bing_url(url: str) -> str:
+    """Decodes Bing redirect tracking URL or returns clean target URL for backwards compatibility."""
+    if not url:
+        return ""
+    if "bing.com/ck/a" in url and "u=" in url:
+        try:
+            m = re.search(r"[?&]u=([a-zA-Z0-9_\-]+)", url)
+            if m:
+                raw_u = m.group(1)
+                if raw_u.startswith("a1"):
+                    raw_b64 = raw_u[2:]
+                    pad = len(raw_b64) % 4
+                    if pad:
+                        raw_b64 += "=" * (4 - pad)
+                    decoded = base64.urlsafe_b64decode(raw_b64).decode("utf-8", errors="ignore")
+                    if decoded.startswith("http"):
+                        return decoded
         except Exception:
             pass
-    return url
+    return unwrap_google_url(url)
+
+
+
+def is_id_lang(lang: str) -> bool:
+    return lang.lower().startswith("id")
+
 
 
 def search_web(
@@ -137,9 +163,9 @@ def search_web(
     language: str = "id",
     max_results: int = 5,
 ) -> List[SearchResult]:
-    """Performs real web search across the internet, returning structured SearchResult items.
+    """Performs real web search using Google Search as primary engine.
 
-    Primary: General web search engine.
+    Primary: Google Web & News intelligence.
     Secondary / Fallback: Wikipedia OpenSearch & Summary API.
     """
     clean_q = query.strip()
@@ -148,56 +174,52 @@ def search_web(
 
     results: List[SearchResult] = []
     seen_urls = set()
+    lang_code = "id" if language.lower().startswith("id") else "en"
 
-    # Provider A: General Live Web Search (Bing endpoint with unwrapped URLs)
+    # Provider A: Google Search & Web Intelligence
     try:
-        headers = {
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "id,en;q=0.9" if language.lower().startswith("id") else "en,id;q=0.8",
-        }
+        import xml.etree.ElementTree as ET
+
+        # 1. Google News / Web Intelligence Feed
+        google_rss_url = (
+            f"https://news.google.com/rss/search?q={urllib.parse.quote(clean_q)}"
+            f"&hl={lang_code}&gl=ID&ceid=ID:{lang_code}"
+        )
         resp = requests.get(
-            "https://www.bing.com/search",
-            params={"q": clean_q},
-            headers=headers,
+            google_rss_url,
+            headers={"User-Agent": USER_AGENT},
             timeout=5,
         )
-        if resp.status_code == 200:
-            blocks = re.findall(r'<li class="b_algo"[\s\S]*?</li>', resp.text)
-            for b in blocks:
-                m_h2 = re.search(r'<h2>\s*<a\s+[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>\s*</h2>', b)
-                m_p = re.search(r'<div class="b_caption">[\s\S]*?<p[^>]*>([\s\S]*?)</p>', b)
-                if m_h2:
-                    raw_url = html.unescape(m_h2.group(1))
-                    real_url = unwrap_bing_url(raw_url)
-                    if real_url in seen_urls:
-                        continue
-                    seen_urls.add(real_url)
+        if resp.status_code == 200 and resp.content:
+            root = ET.fromstring(resp.content)
+            items = root.findall(".//item")
+            for it in items[:max_results]:
+                t_el = it.find("title")
+                l_el = it.find("link")
+                s_el = it.find("source")
+                title_txt = t_el.text if t_el is not None else ""
+                raw_link = l_el.text if l_el is not None else ""
+                source_domain = s_el.attrib.get("url", "") if (s_el is not None and s_el.attrib) else ""
+                publisher = s_el.text if s_el is not None else ""
 
-                    title = html.unescape(re.sub(r"<[^>]+>", "", m_h2.group(2))).strip()
-                    snip = ""
-                    if m_p:
-                        # Clean date stamp prefixes like "Nov 24, 2025 · " or "3 days ago · "
-                        raw_snip = html.unescape(re.sub(r"<[^>]+>", "", m_p.group(1))).strip()
-                        raw_snip = re.sub(r"^[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s*[\·\-\–\—\•]\s*", "", raw_snip)
-                        raw_snip = re.sub(r"^\d+\s+(?:days?|hours?|mins?|hari|jam|menit)\s+ago\s*[\·\-\–\—\•]\s*", "", raw_snip, flags=re.IGNORECASE)
-                        snip = raw_snip
+                if not raw_link or raw_link in seen_urls:
+                    continue
+                seen_urls.add(raw_link)
 
-                    domain = extract_domain(real_url)
-                    results.append(SearchResult(
-                        title=title,
-                        snippet=snip,
-                        url=real_url,
-                        domain=domain,
-                        source_type="web",
-                    ))
-                    if len(results) >= max_results:
-                        break
+                domain = extract_domain(source_domain or raw_link)
+                results.append(SearchResult(
+                    title=title_txt,
+                    snippet=f"Dilaporkan oleh {publisher}. {title_txt}" if is_id_lang(language) else f"Reported by {publisher}. {title_txt}",
+                    url=raw_link,
+                    domain=domain or "google.com",
+                    source_type="google",
+                ))
+                if len(results) >= max_results:
+                    break
     except Exception as e:
-        logger.debug("Live web search error for %r: %s", clean_q, e)
+        logger.warning("Google search feed error for %r: %s", clean_q, e)
 
     # Provider B: Wikipedia OpenSearch API (Factual encyclopedic backing)
-    lang_code = "id" if language.lower().startswith("id") else "en"
     try:
         wiki_url = f"https://{lang_code}.wikipedia.org/w/api.php"
         params = {
@@ -223,10 +245,13 @@ def search_web(
                         domain=f"{lang_code}.wikipedia.org",
                         source_type="encyclopedia",
                     ))
+                    if len(results) >= max_results:
+                        break
     except Exception as e:
         logger.debug("Wikipedia search error for %r: %s", clean_q, e)
 
     return results
+
 
 
 def fetch_page_content(url: str, max_chars: int = 3000) -> Tuple[bool, str, str]:

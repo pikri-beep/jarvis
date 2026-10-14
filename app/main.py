@@ -88,6 +88,7 @@ def execute_turn(
     orchestrator: Orchestrator,
     user_input: str,
     voice_metrics: dict = None,
+    wake_detector: Optional[WakeWordDetector] = None,
 ) -> bool:
     """Processes a single conversational turn with streaming output and TTS playback.
 
@@ -111,6 +112,8 @@ def execute_turn(
 
     # Route to streaming TTS if speech output is enabled
     if tts_engine and tts_engine.enabled and route.route_type != RouteType.TERMINAL_COMMAND:
+        if wake_detector:
+            wake_detector.set_state(WakeWordState.SPEAKING)
         tts_lang = (
             orchestrator.settings.tts_language_mode
             if orchestrator.settings.tts_language_mode != "auto"
@@ -174,7 +177,12 @@ def run_repl(
     stop_event = threading.Event()
 
     def _on_wake_detected(score: float):
-        print(f"\n  🔔 [WAKE WORD DETECTED: 'Hey Jarvis' (confidence: {score:.2f})] Listening for command...", flush=True)
+        print(f"\n  🔔 [WAKE WORD DETECTED: 'Jarvis' (confidence: {score:.2f})] Listening for command...", flush=True)
+
+    def _on_barge_in():
+        print(f"\n\r{' '*75}\r  ⚡ [BARGE-IN / STOP DETECTED] Interrupting speech...", flush=True)
+        if orchestrator.settings.tts_enabled:
+            orchestrator.get_tts().stop()
 
     def _on_silence_timeout():
         print(f"\r{' '*75}\r  [!] No speech detected. Returning to standby.\n", flush=True)
@@ -186,13 +194,14 @@ def run_repl(
     # Initialize wake-word detector if starting in wake mode
     if mode == "wake":
         try:
-            print("[Wake Word] Initializing offline detector for 'Hey Jarvis'...")
+            print("[Wake Word] Initializing offline detector for 'Jarvis'...")
             wake_detector = orchestrator.get_wake_word()
             wake_detector.on_wake_word = _on_wake_detected
+            wake_detector.on_barge_in = _on_barge_in
             wake_detector.on_silence_timeout = _on_silence_timeout
             wake_detector.on_command_captured = _on_command_captured
             wake_detector.start()
-            print("[Wake Word] Always-listening active! Speak 'Hey Jarvis' anytime.\n")
+            print("[Wake Word] Always-listening active! Speak 'Jarvis' or 'Hey Jarvis' anytime.\n")
         except Exception as e:
             print(f"[Wake Word Warning] Failed to start wake-word detector: {e}")
             mode = "ptt" if voice_enabled else "text"
@@ -214,6 +223,38 @@ def run_repl(
 
     print_banner(orchestrator, wake_active=(mode == "wake"), ptt_active=(mode == "ptt"))
 
+    auto_listen_cancel = threading.Event()
+
+    def _trigger_auto_listen_if_needed() -> None:
+        """Starts a 6-second non-blocking auto-listen window if a task or clarification is awaiting user input."""
+        needs_listen = (
+            orchestrator.state.pending_vision_task is not None
+            or orchestrator.state.pending_action is not None
+        )
+        if needs_listen and (mode in ("wake", "ptt") or orchestrator.settings.voice_enabled):
+            auto_listen_cancel.clear()
+            print("\n  [🎙️ Auto-listening 6s for your response, or type answer below] > ", end="", flush=True)
+
+            def _timed_worker():
+                try:
+                    if wake_detector and mode == "wake":
+                        wake_detector.pause(release_device=True)
+                    timed_recorder = PushToTalkRecorder(device_index=orchestrator.settings.audio_device)
+                    aud = timed_recorder.record_timed(max_duration=6.0, cancel_event=auto_listen_cancel)
+                    if len(aud) > 0 and not auto_listen_cancel.is_set():
+                        event_queue.put(("auto_voice", aud))
+                    elif not auto_listen_cancel.is_set():
+                        print(f"\r{' '*75}\r  [Waktu mendengarkan selesai. Silakan ketik atau bicara kapan saja.]\n", flush=True)
+                        _print_prompt()
+                except Exception as e:
+                    logger.debug("Auto-listen worker error: %s", e)
+                finally:
+                    if wake_detector and mode == "wake":
+                        wake_detector.resume()
+
+            t = threading.Thread(target=_timed_worker, name="AutoListenWorker", daemon=True)
+            t.start()
+
     def _print_prompt():
         if mode == "wake":
             print("\nYou [🎙️ Listening for 'Hey Jarvis', or type command] > ", end="", flush=True)
@@ -234,6 +275,25 @@ def run_repl(
             if event_type == "eof":
                 print("\n\nExiting JARVIS. Goodbye, sir.")
                 break
+
+            # EVENT 0: AUTO-LISTEN VOICE RESPONSE (Dual Mode 6s window)
+            if event_type == "auto_voice":
+                audio_data = event_data
+                if len(audio_data) > 0:
+                    transcription, info = orchestrator.transcribe_audio(audio_data)
+                    if transcription:
+                        lang_detected = info.get("language", "id")
+                        print(f"\r{' '*75}\r  [🎙️ Voice Input ({lang_detected.upper()})]: \"{transcription}\"")
+                        should_continue = execute_turn(orchestrator, transcription, wake_detector=wake_detector)
+                        if not should_continue:
+                            break
+                        if orchestrator.state.pending_vision_task or orchestrator.state.pending_action:
+                            _trigger_auto_listen_if_needed()
+                        else:
+                            _print_prompt()
+                        continue
+                _print_prompt()
+                continue
 
             # EVENT A: VOICE COMMAND (Captured via Always-Listening Wake Word)
             if event_type == "voice":
@@ -269,20 +329,26 @@ def run_repl(
                 try:
                     if wake_detector and mode == "wake":
                         wake_detector.set_state(WakeWordState.INTERPRETING)
-                    should_continue = execute_turn(orchestrator, transcription, voice_metrics=metrics)
+                    should_continue = execute_turn(orchestrator, transcription, voice_metrics=metrics, wake_detector=wake_detector)
                 finally:
-                    # Guarantee resume of wake-word detection after spoken response completes or on error
+                    # Guarantee resume of wake-word detection after spoken response completes or on error,
+                    # unless barge-in has already transitioned to capturing the new user command
                     if wake_detector and mode == "wake":
-                        wake_detector.resume()
+                        if wake_detector.state not in (WakeWordState.WAITING_FOR_SPEECH, WakeWordState.RECORDING):
+                            wake_detector.resume()
 
                 if not should_continue:
                     break
 
-                _print_prompt()
+                if orchestrator.state.pending_vision_task or orchestrator.state.pending_action:
+                    _trigger_auto_listen_if_needed()
+                else:
+                    _print_prompt()
                 continue
 
             # EVENT B: KEYBOARD INPUT
             elif event_type == "keyboard":
+                auto_listen_cancel.set()
                 user_input = event_data
 
                 # Empty input in PTT mode -> Trigger microphone recording
@@ -338,7 +404,10 @@ def run_repl(
                     should_continue = execute_turn(orchestrator, transcription, voice_metrics=metrics)
                     if not should_continue:
                         break
-                    _print_prompt()
+                    if orchestrator.state.pending_vision_task or orchestrator.state.pending_action:
+                        _trigger_auto_listen_if_needed()
+                    else:
+                        _print_prompt()
                     continue
 
                 elif not user_input:
@@ -385,10 +454,13 @@ def run_repl(
                     continue
 
                 # Standard text turn
-                should_continue = execute_turn(orchestrator, user_input)
+                should_continue = execute_turn(orchestrator, user_input, wake_detector=wake_detector)
                 if not should_continue:
                     break
-                _print_prompt()
+                if orchestrator.state.pending_vision_task or orchestrator.state.pending_action:
+                    _trigger_auto_listen_if_needed()
+                else:
+                    _print_prompt()
     except KeyboardInterrupt:
         print("\n\nOperation cancelled. Exiting JARVIS, sir.")
     finally:
@@ -434,6 +506,16 @@ def main() -> None:
         action="store_true",
         help="Disable spoken Text-to-Speech output.",
     )
+    parser.add_argument(
+        "--cli", "--terminal",
+        action="store_true",
+        help="Launch in terminal CLI / REPL mode instead of GUI.",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch in Desktop GUI mode (default behavior).",
+    )
     args = parser.parse_args()
 
     orchestrator = Orchestrator()
@@ -445,8 +527,16 @@ def main() -> None:
 
     if args.query:
         run_single_query(orchestrator, args.query)
-    else:
+    elif args.cli:
         run_repl(orchestrator, voice_enabled=voice_enabled, wake_enabled=wake_enabled)
+    else:
+        try:
+            from app.ui import run_gui
+            sys.exit(run_gui(orchestrator))
+        except Exception as e:
+            logger.warning("Failed to start Desktop GUI (%s); falling back to terminal REPL", e)
+            print(f"[NOTE] Falling back to terminal REPL mode: {e}")
+            run_repl(orchestrator, voice_enabled=voice_enabled, wake_enabled=wake_enabled)
 
 
 if __name__ == "__main__":

@@ -109,7 +109,7 @@ def adjust_volume(direction: str = "up", steps: int = 2) -> Tuple[bool, str]:
         elif direction == "down":
             _send_vk(VK_VOLUME_DOWN, times=steps)
             return True, f"Menurunkan volume sebesar {steps * 2} persen."
-        elif direction in ("mute", "toggle_mute"):
+        elif direction in ("mute", "toggle_mute", "unmute"):
             _send_vk(VK_VOLUME_MUTE)
             return True, "Mengalihkan status senyap (Mute/Unmute)."
         else:

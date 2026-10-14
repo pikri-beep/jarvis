@@ -12,11 +12,34 @@ Spoken Interaction & Response Guidelines:
 """
 
 
+from datetime import datetime
+
+
 def get_system_prompt(custom_prompt: str = "", language: str = "") -> str:
-    """Returns the effective system prompt for JARVIS, reinforcing the target response language."""
+    """Returns the effective system prompt for JARVIS, reinforcing the target response language and real-time temporal grounding."""
     base_prompt = custom_prompt.strip() if custom_prompt.strip() else DEFAULT_SYSTEM_PROMPT
+    now = datetime.now()
+    now_str = now.strftime("%A, %d %B %Y, %H:%M")
+    temporal_context = (
+        f"\nTemporal & System Grounding:\n"
+        f"- Current Date and Time: {now_str}\n"
+        f"- Operating System: Windows 11\n"
+        f"Always use this current date and time when asked about temporal information (today's date, day, month, year, time)."
+    )
+    full_prompt = f"{base_prompt}\n{temporal_context}"
+
+    # Inject dynamic user profile, preferences, and custom rules
+    try:
+        from app.memory.memory import get_relevant_memories_prompt
+        mem_prompt = get_relevant_memories_prompt(language=language)
+        if mem_prompt:
+            full_prompt = f"{full_prompt}\n{mem_prompt}"
+    except Exception:
+        pass
+
     if language.startswith("id"):
-        return f"{base_prompt}\nCRITICAL LANGUAGE DIRECTIVE: The user is speaking Bahasa Indonesia. You MUST generate your response entirely in Bahasa Indonesia, sir."
+        return f"{full_prompt}\nCRITICAL LANGUAGE DIRECTIVE: The user is speaking Bahasa Indonesia. You MUST generate your response entirely in Bahasa Indonesia."
     elif language.startswith("en"):
-        return f"{base_prompt}\nCRITICAL LANGUAGE DIRECTIVE: The user is speaking English. You MUST generate your response entirely in English, sir."
-    return base_prompt
+        return f"{full_prompt}\nCRITICAL LANGUAGE DIRECTIVE: The user is speaking English. You MUST generate your response entirely in English."
+    return full_prompt
+

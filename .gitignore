@@ -26,6 +26,8 @@ data/*.wav
 data/tts_evaluation/
 data/*.mp3
 data/*.db
+data/*.joblib
+*.joblib
 
 # Large TTS model binaries (>50MB, downloaded on runtime)
 data/models/piper/*.onnx

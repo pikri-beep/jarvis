@@ -155,13 +155,14 @@ def test_send_shortcut():
 
 
 def test_focus_application():
-    """Verifies focus_application uses PowerShell AppActivate."""
-    with patch("subprocess.run") as mock_run:
+    """Verifies focus_application uses PowerShell AppActivate as fallback."""
+    with patch("app.tools.desktop.bring_window_to_foreground", return_value=False), \
+         patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="True\n", stderr="")
         ok, msg = focus_application("chrome", language="id")
         assert ok is True
         assert "Google Chrome" in msg
-        mock_run.assert_called_once()
+        mock_run.assert_called()
         cmd = mock_run.call_args[0][0]
         assert "powershell" in cmd[0]
         assert "AppActivate" in cmd[-1]

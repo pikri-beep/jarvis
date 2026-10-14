@@ -195,3 +195,94 @@ def test_indonesian_fast_commands(router):
     assert res_edge.route_type == RouteType.FAST_COMMAND
     assert res_edge.args.get("target") == "edge"
 
+
+def test_user_reported_edge_cases(router):
+    """Verifies edge cases reported by user: gemini, unmute, volume percentage, phutar typo."""
+    # 1. Buka Gemini and web apps
+    r_gem = router.route("buka gemini")
+    assert r_gem.route_type == RouteType.FAST_COMMAND
+    assert r_gem.action == "open_website"
+    assert r_gem.args.get("target") == "gemini"
+
+    r_gem_chrome = router.route("buka gemini di google chrome")
+    assert r_gem_chrome.route_type == RouteType.FAST_COMMAND
+    assert r_gem_chrome.action == "open_website"
+    assert r_gem_chrome.args.get("target") == "gemini"
+
+    # 2. Unmute
+    r_unmute = router.route("unmute")
+    assert r_unmute.route_type == RouteType.FAST_COMMAND
+    assert r_unmute.action == "toggle_mute"
+
+    # 3. Volume with percentage
+    r_vol = router.route("kecilkan suara 20%")
+    assert r_vol.route_type == RouteType.FAST_COMMAND
+    assert r_vol.action == "volume_down"
+    assert r_vol.args.get("percentage") == 20
+    assert r_vol.args.get("steps") == 10
+
+    r_vol_up = router.route("naikkan volume 10%")
+    assert r_vol_up.route_type == RouteType.FAST_COMMAND
+    assert r_vol_up.action == "volume_up"
+    assert r_vol_up.args.get("percentage") == 10
+    assert r_vol_up.args.get("steps") == 5
+
+    # 4. Typo phutar
+    r_phutar = router.route("phutar lagu sambulah by denada")
+    assert r_phutar.route_type == RouteType.FAST_COMMAND
+    assert r_phutar.action == "play_music"
+    assert "sambulah by denada" in r_phutar.args.get("query")
+
+    # 5. Discord, task manager typo, screenshot, battery, and lock screen
+    r_disc = router.route("Open discord")
+    assert r_disc.route_type == RouteType.FAST_COMMAND
+    assert r_disc.action == "open_application"
+    assert r_disc.args.get("target") == "discord"
+
+    r_tm = router.route("opem task manager")
+    assert r_tm.route_type == RouteType.FAST_COMMAND
+    assert r_tm.action == "open_application"
+    assert r_tm.args.get("target") == "taskmgr"
+
+    r_ss = router.route("screenshot layar ku")
+    assert r_ss.route_type == RouteType.FAST_COMMAND
+    assert r_ss.action == "take_screenshot"
+
+    r_bat = router.route("Berapa Batrai saya sekarang?")
+    assert r_bat.route_type == RouteType.FAST_COMMAND
+    assert r_bat.action == "battery_status"
+
+    r_lock = router.route("lock my screen")
+    assert r_lock.route_type == RouteType.FAST_COMMAND
+    assert r_lock.action == "lock_screen"
+
+    # 6. Lock screen with 'saya'
+    r_lock_saya = router.route("Kunci layar saya")
+    assert r_lock_saya.route_type == RouteType.FAST_COMMAND
+    assert r_lock_saya.action == "lock_screen"
+
+    r_lock_komp = router.route("kunci komputer saya")
+    assert r_lock_komp.route_type == RouteType.FAST_COMMAND
+    assert r_lock_komp.action == "lock_screen"
+
+    # 7. STT commas in voice commands
+    r_play_comma = router.route("Play, creep by radio hat.")
+    assert r_play_comma.route_type == RouteType.FAST_COMMAND
+    assert r_play_comma.action == "play_music"
+    assert "creep by radio hat" in r_play_comma.args.get("query")
+
+    r_play_comma2 = router.route("Play, clip, buy radio hat.")
+    assert r_play_comma2.route_type == RouteType.FAST_COMMAND
+    assert r_play_comma2.action == "play_music"
+
+    # 8. Bare /vision requires clarification and does not execute unprompted timer
+    r_vis_bare = router.route("/vision")
+    assert r_vis_bare.route_type == RouteType.CLARIFY
+    assert r_vis_bare.action == "clarify_vision"
+
+    r_vis_goal = router.route("/vision setel timer 5 menit")
+    assert r_vis_goal.route_type == RouteType.FAST_COMMAND
+    assert r_vis_goal.action == "vision_task"
+    assert r_vis_goal.args.get("goal") == "setel timer 5 menit"
+
+

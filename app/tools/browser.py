@@ -8,6 +8,7 @@ Follows AGENTS.md security guidelines:
 - Reports failures honestly.
 """
 
+import difflib
 import os
 import re
 import subprocess
@@ -47,6 +48,57 @@ class WebsiteRegistry:
         self._alias_map[site.display_name.lower()] = site.canonical_name
         for alias in site.aliases:
             self._alias_map[alias.strip().lower()] = site.canonical_name
+
+    def register_alias(self, alias: str, canonical_name: str) -> bool:
+        """Dynamically registers an alias for an existing canonical website."""
+        clean_alias = alias.strip().lower()
+        clean_canon = canonical_name.strip().lower()
+        if not clean_alias or clean_canon not in self._sites:
+            return False
+        self._alias_map[clean_alias] = clean_canon
+        site = self._sites[clean_canon]
+        if clean_alias not in [a.lower() for a in site.aliases]:
+            site.aliases.append(clean_alias)
+        logger.info("Registered dynamic website alias '%s' -> '%s'", clean_alias, clean_canon)
+        return True
+
+    def find_fuzzy_matches(self, query: str, cutoff: float = 0.55) -> List[Tuple[str, str, float]]:
+        """Finds closest registered website candidates based on string similarity.
+
+        Returns:
+            List of (canonical_name, display_name, score) sorted by score descending.
+        """
+        if not query:
+            return []
+        q = query.strip().lower()
+        best_per_site: Dict[str, Tuple[str, float]] = {}
+
+        for canonical, site in self._sites.items():
+            candidates = [canonical, site.display_name.lower()] + [a.lower() for a in site.aliases]
+            max_s = 0.0
+            for cand in candidates:
+                cand_lower = cand.strip().lower()
+                is_sub = False
+                if len(cand_lower) >= 4 and cand_lower in q:
+                    is_sub = True
+                elif len(q) >= 4 and q in cand_lower:
+                    is_sub = True
+                elif cand_lower in q.split() or q in cand_lower.split():
+                    is_sub = True
+
+                if is_sub:
+                    sub_ratio = len(min(q, cand_lower, key=len)) / max(len(q), len(cand_lower), 1)
+                    s = max(difflib.SequenceMatcher(None, q, cand_lower).ratio(), 0.6 + 0.35 * sub_ratio)
+                else:
+                    s = difflib.SequenceMatcher(None, q, cand_lower).ratio()
+                if s > max_s:
+                    max_s = s
+            if max_s >= cutoff:
+                best_per_site[canonical] = (site.display_name, max_s)
+
+        results = [(can, name, score) for can, (name, score) in best_per_site.items()]
+        results.sort(key=lambda x: x[2], reverse=True)
+        return results
 
     def get(self, name: str) -> Optional[WebsiteDefinition]:
         """Retrieves a website definition by canonical name or alias."""
@@ -132,6 +184,51 @@ class WebsiteRegistry:
             )
         )
 
+        # 6. Gemini
+        self.register(
+            WebsiteDefinition(
+                canonical_name="gemini",
+                display_name="Google Gemini",
+                url="https://gemini.google.com",
+                aliases=[
+                    "gemini", "google gemini", "gemini ai", "gemini.google.com",
+                    "gemini google", "aplikasi gemini", "situs gemini", "web gemini"
+                ],
+            )
+        )
+
+        # 7. Claude
+        self.register(
+            WebsiteDefinition(
+                canonical_name="claude",
+                display_name="Anthropic Claude",
+                url="https://claude.ai",
+                aliases=[
+                    "claude", "claude ai", "anthropic claude", "claude.ai", "situs claude"
+                ],
+            )
+        )
+
+        # 8. GitHub
+        self.register(
+            WebsiteDefinition(
+                canonical_name="github",
+                display_name="GitHub",
+                url="https://github.com",
+                aliases=["github", "git hub", "github.com", "situs github"],
+            )
+        )
+
+        # 9. WhatsApp Web
+        self.register(
+            WebsiteDefinition(
+                canonical_name="whatsapp_web",
+                display_name="WhatsApp Web",
+                url="https://web.whatsapp.com",
+                aliases=["whatsapp web", "wa web", "web whatsapp", "web wa"],
+            )
+        )
+
 
 # Global singleton registry
 website_registry = WebsiteRegistry()
@@ -143,6 +240,7 @@ def is_known_website(raw_name: str) -> bool:
         return False
     cleaned = re.sub(r"^(?:situs|website|web|laman|halaman)\s+", "", raw_name.strip(), flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+(?:site|website|web)$", "", cleaned.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+(?:di|in|pada)\s+(?:google\s+)?(?:chrome|krom|browser|peramban|edge)$", "", cleaned.strip(), flags=re.IGNORECASE)
     if website_registry.is_registered(cleaned):
         return True
     # Direct URL check (e.g. https://..., http://..., domain.com, or sub.domain.com)
@@ -155,6 +253,7 @@ def normalize_website_target(raw_name: str) -> Tuple[str, str, str]:
     """Resolves raw website query into (canonical_name, display_name, url)."""
     cleaned = re.sub(r"^(?:situs|website|web|laman|halaman)\s+", "", raw_name.strip(), flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+(?:site|website|web)$", "", cleaned.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+(?:di|in|pada)\s+(?:google\s+)?(?:chrome|krom|browser|peramban|edge)$", "", cleaned.strip(), flags=re.IGNORECASE)
 
     site = website_registry.get(cleaned)
     if site:
@@ -200,11 +299,11 @@ def launch_website(raw_target: str) -> Tuple[bool, str, str, str]:
                 close_fds=True,
                 creationflags=subprocess.DETACHED_PROCESS if hasattr(subprocess, "DETACHED_PROCESS") else 0,
             )
-            if proc.pid and proc.poll() is None:
+            if proc.pid and (proc.poll() is None or proc.poll() == 0):
                 logger.info("Successfully opened website '%s' (%s) in Chrome (PID %d)", display_name, target_url, proc.pid)
                 return True, display_name, target_url, f"Berhasil membuka {display_name} di Google Chrome."
             else:
-                logger.warning("Chrome process exited immediately (code %s) for '%s'", proc.returncode, target_url)
+                logger.warning("Chrome process exited with error (code %s) for '%s'", proc.returncode, target_url)
         except Exception as e:
             logger.warning("Failed to launch Chrome with URL '%s': %s. Falling back to default browser.", target_url, e)
 

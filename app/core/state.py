@@ -34,9 +34,11 @@ class SessionState:
     last_search_context: Dict[str, Any] = field(default_factory=dict)
     last_screen_context: Dict[str, Any] = field(default_factory=dict)
     pending_action: Optional[PendingAction] = None
+    pending_vision_task: Optional[Any] = None
     last_observation: Optional[Any] = None
     last_focused_element: Optional[Any] = None
     current_task: Optional[Any] = None
+    is_muted: bool = False
 
     def add_message(self, role: str, content: str) -> None:
         """Appends a message to conversation history with sliding window pruning."""
@@ -154,6 +156,18 @@ class SessionState:
         """Clears the currently focused UI element."""
         self.last_focused_element = None
 
+    def set_pending_vision_task(self, task: Any) -> None:
+        """Stores the active paused vision task state for interactive resumption."""
+        self.pending_vision_task = task
+
+    def get_pending_vision_task(self) -> Optional[Any]:
+        """Retrieves the active paused vision task state."""
+        return self.pending_vision_task
+
+    def clear_pending_vision_task(self) -> None:
+        """Clears the active paused vision task."""
+        self.pending_vision_task = None
+
     def clear(self) -> None:
         """Clears conversation history and action context."""
         self.history.clear()
@@ -161,6 +175,7 @@ class SessionState:
         self.last_search_context.clear()
         self.last_screen_context.clear()
         self.pending_action = None
+        self.pending_vision_task = None
         self.last_observation = None
         self.last_focused_element = None
         self.current_task = None

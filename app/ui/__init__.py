@@ -1,1 +1,5 @@
-"""User interface package (Phase 7)."""
+"""JARVIS Graphical User Interface (GUI) package."""
+
+from app.ui.app import run_gui
+
+__all__ = ["run_gui"]

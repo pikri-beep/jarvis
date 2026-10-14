@@ -641,6 +641,9 @@ class TextToSpeech:
         active_lang = language
 
         for token in token_generator:
+            if self.playback_queue._stop_event.is_set():
+                break
+
             if on_token:
                 on_token(token)
 

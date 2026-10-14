@@ -3,7 +3,7 @@
 import queue
 import threading
 import time
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 import numpy as np
 import sounddevice as sd
 
@@ -92,20 +92,37 @@ def find_working_input_device(
                     except Exception as e:
                         logger.debug("Preferred device test error: %s", e)
 
-    # 2. Prioritize devices: Microphone Array first, then Microphone, then others
+    # 2. Prioritize devices: WASAPI and MME shared devices first, avoid WDM-KS exclusive streams
+    try:
+        hostapis = sd.query_hostapis()
+    except Exception:
+        hostapis = []
+
     candidates = []
     for idx, d in enumerate(devices):
         if d["max_input_channels"] > 0:
+            h_idx = d.get("hostapi", -1)
+            h_name = hostapis[h_idx]["name"].lower() if 0 <= h_idx < len(hostapis) else ""
             name_lower = d["name"].lower()
-            if "microphone array" in name_lower:
-                priority = 0
-            elif "microphone" in name_lower or "mic" in name_lower:
-                priority = 1
-            elif "stereo mix" in name_lower:
-                priority = 3  # Avoid stereo mix (desktop loopback)
+            if any(bad in name_lower for bad in ["stereo mix", "loopback", "steam streaming", "pc speaker"]):
+                continue  # Avoid loopback desktop audio and virtual drivers
+
+            # Prefer WASAPI, then WDM-KS (Acer hardware mic), then DirectSound/MME
+            if "wasapi" in h_name:
+                host_prio = 0
+            elif "wdm-ks" in h_name or "kernel streaming" in h_name:
+                host_prio = 1
             else:
-                priority = 2
-            candidates.append((priority, idx))
+                host_prio = 2
+
+            if "microphone array" in name_lower:
+                dev_prio = 0
+            elif "microphone" in name_lower or "mic" in name_lower:
+                dev_prio = 1
+            else:
+                dev_prio = 2
+
+            candidates.append(((host_prio, dev_prio), idx))
 
     candidates.sort(key=lambda x: x[0])
     valid_devices = []
@@ -170,6 +187,8 @@ def find_working_input_device(
             best[5],
             best[4],
         )
+        _CACHED_INPUT_DEVICE = (best[0], best[1], best[2])
+        _CACHED_INPUT_DEVICE_KEY = preferred_idx
         return best[0], best[1], best[2]
 
     # Fallback to system default
@@ -180,8 +199,13 @@ def find_working_input_device(
 class PushToTalkRecorder:
     """Manages push-to-talk audio recording via sounddevice."""
 
-    def __init__(self, device_index: Optional[int] = None):
+    def __init__(
+        self,
+        device_index: Optional[int] = None,
+        level_callback: Optional[Callable[[float], None]] = None,
+    ):
         self.device_index, self.sample_rate, self.channels = find_working_input_device(device_index)
+        self.level_callback = level_callback
         self._is_recording = False
         self._queue: queue.Queue = queue.Queue()
         self._stream: Optional[sd.InputStream] = None
@@ -206,6 +230,12 @@ class PushToTalkRecorder:
         """Callback invoked by PortAudio for each incoming audio block."""
         if self._is_recording:
             self._queue.put(indata.copy())
+            if self.level_callback is not None:
+                try:
+                    rms = float(np.sqrt(np.mean(indata**2)))
+                    self.level_callback(rms)
+                except Exception:
+                    pass
 
     def start_recording(self) -> None:
         """Starts recording audio from the microphone."""
@@ -238,9 +268,28 @@ class PushToTalkRecorder:
                 self.channels,
             )
         except Exception as e:
-            self._is_recording = False
-            logger.error("Failed to start audio input stream: %s", e)
-            raise
+            logger.warning("Push-to-Talk failed on device #%s (%s); refreshing device", self.device_index, e)
+            try:
+                self.device_index, self.sample_rate, self.channels = find_working_input_device(force_refresh=True)
+                self._stream = sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=self.channels,
+                    dtype="float32",
+                    device=self.device_index,
+                    callback=self._audio_callback,
+                    blocksize=1024,
+                )
+                self._stream.start()
+                logger.info(
+                    "Push-to-Talk recording recovered on device #%s (sr=%d, ch=%d)",
+                    self.device_index,
+                    self.sample_rate,
+                    self.channels,
+                )
+            except Exception as e2:
+                self._is_recording = False
+                logger.error("Failed to start audio input stream: %s", e2)
+                raise
 
     def stop_recording(self) -> np.ndarray:
         """Stops recording and returns normalized 16kHz mono audio as float32 numpy array."""
@@ -291,6 +340,13 @@ class PushToTalkRecorder:
         peak = float(np.max(np.abs(resampled))) if len(resampled) > 0 else 0.0
         rms = float(np.sqrt(np.mean(resampled**2))) if len(resampled) > 0 else 0.0
 
+        # Software AGC headroom normalization for laptop microphones
+        if peak > 0.0001 and peak < 0.3:
+            gain = min(15.0, 0.6 / max(peak, 0.001))
+            resampled = resampled * gain
+            peak = float(np.max(np.abs(resampled)))
+            rms = float(np.sqrt(np.mean(resampled**2)))
+
         self._last_metrics = {
             "duration_s": duration_s,
             "peak": peak,
@@ -307,3 +363,48 @@ class PushToTalkRecorder:
             rms,
         )
         return resampled
+
+    def record_timed(
+        self,
+        max_duration: float = 6.0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> np.ndarray:
+        """Records microphone audio up to max_duration seconds with early silence detection."""
+        self.start_recording()
+        t_start = time.time()
+        has_spoken = False
+        silence_start = None
+        ambient_rms = 0.001
+
+        while time.time() - t_start < max_duration:
+            if cancel_event and cancel_event.is_set():
+                break
+            time.sleep(0.08)
+
+            if not self._queue.empty():
+                blocks = []
+                while not self._queue.empty():
+                    try:
+                        blocks.append(self._queue.get_nowait())
+                    except queue.Empty:
+                        break
+                if blocks:
+                    self._chunks.extend(blocks)
+                    cat = np.concatenate(blocks, axis=0)
+                    rms = float(np.sqrt(np.mean(cat ** 2)))
+                    if not has_spoken and time.time() - t_start < 0.4:
+                        ambient_rms = 0.8 * ambient_rms + 0.2 * rms
+
+                    speech_threshold = max(0.0025, ambient_rms * 1.5)
+                    if rms >= speech_threshold:
+                        has_spoken = True
+                        silence_start = None
+                    elif has_spoken:
+                        if silence_start is None:
+                            silence_start = time.time()
+                        elif time.time() - silence_start > 1.2:
+                            # 1.2s silence after speech -> user done speaking
+                            break
+
+        return self.stop_recording()
+

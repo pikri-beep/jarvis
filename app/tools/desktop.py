@@ -315,13 +315,36 @@ def mouse_scroll(direction: str = "down", amount: int = 5, language: str = "id")
 # Keyboard & Input Automation
 # ---------------------------------------------------------------------------
 
+def is_host_terminal_active() -> bool:
+    """Checks if the currently active foreground window belongs to the host terminal or Python process."""
+    try:
+        details = get_active_window_details()
+        if not details.is_valid:
+            return False
+        proc = (details.process_name or "").lower()
+        if proc in ("powershell.exe", "pwsh.exe", "cmd.exe", "windowsterminal.exe", "wt.exe", "conhost.exe"):
+            return True
+        my_pid = os.getpid()
+        if details.process_id == my_pid:
+            return True
+        try:
+            parent_pid = psutil.Process(my_pid).ppid()
+            if details.process_id == parent_pid:
+                return True
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return False
+
+
 def type_text(text: str, language: str = "id", expected_app: Optional[str] = None) -> Tuple[bool, str]:
     """Types text directly into the focused Windows UI element using SendInput UNICODE events."""
     is_id = language.lower().startswith("id")
     if not text:
         return False, "Teks tidak boleh kosong." if is_id else "Text cannot be empty."
 
-    # Guard: verify expected window if specified
+    # Guard 1: verify expected window if specified
     if expected_app:
         details = get_active_window_details()
         target_clean = expected_app.strip().lower()
@@ -331,6 +354,17 @@ def type_text(text: str, language: str = "id", expected_app: Optional[str] = Non
                 logger.warning("Aborted typing: foreground window '%s' does not match '%s'", details.title, expected_app)
                 msg = f"Mengetik dibatalkan: jendela '{expected_app}' tidak aktif." if is_id else f"Typing aborted: window '{expected_app}' is not focused."
                 return False, msg
+
+    # Guard 2: Never inject keystrokes into the host terminal window
+    if is_host_terminal_active():
+        if expected_app:
+            ok_focus, _ = ensure_window_focus(expected_app, language=language)
+            if not ok_focus or is_host_terminal_active():
+                logger.warning("Suppressed typing: host terminal window is active, preventing terminal pollution.")
+                return False, "Mengetik dibatalkan: jendela terminal host sedang aktif." if is_id else "Typing aborted: host terminal is active."
+        else:
+            logger.warning("Suppressed typing: host terminal window is active, preventing terminal pollution.")
+            return False, "Mengetik dibatalkan: jendela terminal host sedang aktif." if is_id else "Typing aborted: host terminal is active."
 
     try:
         events: List[INPUT] = []
@@ -371,6 +405,10 @@ def type_text(text: str, language: str = "id", expected_app: Optional[str] = Non
 def press_single_key(key_name: str, language: str = "id") -> Tuple[bool, str]:
     """Sends key-down and key-up for a named virtual key (e.g. 'enter', 'esc', 'tab', 'f5')."""
     is_id = language.lower().startswith("id")
+    if is_host_terminal_active():
+        logger.warning("Suppressed key '%s': host terminal window is active.", key_name)
+        return False, f"Penekanan tombol {key_name} dibatalkan: terminal host sedang aktif." if is_id else f"Key {key_name} aborted: host terminal is active."
+
     k = key_name.strip().lower()
     vk = VK_MAP.get(k)
     if not vk:
@@ -464,6 +502,10 @@ def send_key_up(key_name: str, language: str = "id") -> Tuple[bool, str]:
 def send_shortcut(combo: str, language: str = "id") -> Tuple[bool, str]:
     """Executes a keyboard shortcut combination with guaranteed modifier release (e.g. 'ctrl+l', 'ctrl+t', 'ctrl+w', 'alt+left')."""
     is_id = language.lower().startswith("id")
+    if is_host_terminal_active():
+        logger.warning("Suppressed shortcut '%s': host terminal window is active.", combo)
+        return False, f"Pintasan {combo} dibatalkan: terminal host sedang aktif." if is_id else f"Shortcut {combo} aborted: host terminal is active."
+
     tokens = [t.strip().lower() for t in combo.split("+") if t.strip()]
     if not tokens:
         return False, "Kombinasi tombol tidak valid." if is_id else "Invalid hotkey combo."
@@ -508,13 +550,89 @@ def send_shortcut(combo: str, language: str = "id") -> Tuple[bool, str]:
 # Window & Application Switching
 # ---------------------------------------------------------------------------
 
+def bring_window_to_foreground(target_name: str) -> bool:
+    """Uses native Win32 user32 APIs to reliably activate and bring a window to the foreground."""
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        found_hwnd = None
+        target_lower = target_name.strip().lower()
+
+        def enum_cb(hwnd, lparam):
+            nonlocal found_hwnd
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length == 0:
+                return True
+            buff = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buff, length + 1)
+            w_title = buff.value.lower()
+
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            proc_name = ""
+            if pid.value > 0:
+                try:
+                    proc_name = psutil.Process(pid.value).name().lower()
+                except Exception:
+                    pass
+
+            if target_lower in w_title or (proc_name and target_lower in proc_name):
+                found_hwnd = hwnd
+                return False  # Stop enumeration
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+
+        # Fallback: Search top-level window by matching process name
+        if not found_hwnd:
+            for p in psutil.process_iter(["pid", "name"]):
+                try:
+                    pname = (p.info["name"] or "").lower()
+                    if target_lower in pname:
+                        pid_val = p.info["pid"]
+                        def pid_cb(h, lp):
+                            nonlocal found_hwnd
+                            w_pid = wintypes.DWORD()
+                            user32.GetWindowThreadProcessId(h, ctypes.byref(w_pid))
+                            if w_pid.value == pid_val and user32.GetWindowTextLengthW(h) > 0:
+                                found_hwnd = h
+                                return False
+                            return True
+                        user32.EnumWindows(WNDENUMPROC(pid_cb), 0)
+                        if found_hwnd:
+                            break
+                except Exception:
+                    pass
+
+        if found_hwnd:
+            if user32.IsIconic(found_hwnd):
+                user32.ShowWindow(found_hwnd, 9)  # SW_RESTORE
+            else:
+                user32.ShowWindow(found_hwnd, 5)  # SW_SHOW
+
+            fg_hwnd = user32.GetForegroundWindow()
+            if fg_hwnd != found_hwnd:
+                fg_thread = user32.GetWindowThreadProcessId(fg_hwnd, None)
+                cur_thread = kernel32.GetCurrentThreadId()
+                user32.AttachThreadInput(cur_thread, fg_thread, True)
+                user32.BringWindowToTop(found_hwnd)
+                user32.SetForegroundWindow(found_hwnd)
+                user32.AttachThreadInput(cur_thread, fg_thread, False)
+            return True
+    except Exception as e:
+        logger.debug("Native bring_window_to_foreground error: %s", e)
+    return False
+
+
 def focus_application(app_target: str, language: str = "id") -> Tuple[bool, str]:
     """Brings an application window to the foreground on Windows 11.
     
     Tries:
-    1. WScript.Shell AppActivate by title/alias.
-    2. Enumerate top-level window titles matching target.
-    3. If not found running, offers honest feedback or opens it.
+    1. Native Win32 SetForegroundWindow with thread attach (instant, reliable).
+    2. WScript.Shell AppActivate by title/alias.
+    3. If not found running, launches the application and brings it to the front.
     """
     is_id = language.lower().startswith("id")
     canonical = normalize_app_name(app_target)
@@ -528,8 +646,15 @@ def focus_application(app_target: str, language: str = "id") -> Tuple[bool, str]
         for p in app.process_names:
             match_candidates.append(p.replace(".exe", ""))
 
+    # 1. Native Win32 Window Activation (instant, reliable)
+    for candidate in match_candidates:
+        if bring_window_to_foreground(candidate):
+            logger.info("Successfully activated window matching '%s' via Win32", candidate)
+            msg = f"Beralih ke jendela {disp_name}, sir." if is_id else f"Switched to {disp_name}, sir."
+            return True, msg
+
     try:
-        # Use PowerShell AppActivate for fast, native Windows window activation
+        # 2. Fallback to WScript.Shell AppActivate
         for candidate in match_candidates[:4]:
             ps_cmd = f'(New-Object -ComObject WScript.Shell).AppActivate("{candidate}")'
             proc = subprocess.run(
@@ -539,11 +664,21 @@ def focus_application(app_target: str, language: str = "id") -> Tuple[bool, str]
                 timeout=4,
             )
             if proc.returncode == 0 and "True" in proc.stdout:
-                logger.info("Successfully activated window matching '%s'", candidate)
+                logger.info("Successfully activated window matching '%s' via WScript", candidate)
                 msg = f"Beralih ke jendela {disp_name}, sir." if is_id else f"Switched to {disp_name}, sir."
                 return True, msg
 
-        # If not activated, check if application can simply be launched
+        # If not running, attempt to launch it
+        from app.tools.apps import launch_application
+        ok_launch, _, _ = launch_application(canonical)
+        if ok_launch:
+            time.sleep(1.0)
+            for candidate in match_candidates:
+                if bring_window_to_foreground(candidate):
+                    msg = f"Membuka dan beralih ke jendela {disp_name}, sir." if is_id else f"Launched and focused {disp_name}, sir."
+                    return True, msg
+            return True, f"Membuka {disp_name}, sir." if is_id else f"Launched {disp_name}, sir."
+
         msg = f"Jendela untuk {disp_name} tidak ditemukan sedang aktif, sir." if is_id else f"Window for {disp_name} was not found running, sir."
         return False, msg
     except Exception as e:

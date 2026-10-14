@@ -16,7 +16,7 @@ import sounddevice as sd
 
 from app.core.config import Settings, get_settings
 from app.core.logger import setup_logger
-from app.voice.audio_recorder import find_working_input_device
+from app.voice.audio_recorder import find_working_input_device, resample_audio
 
 logger = setup_logger("jarvis.voice.wake_word")
 
@@ -107,9 +107,11 @@ class WakeWordDetector:
         on_command_captured: Optional[Callable[[np.ndarray], None]] = None,
         on_silence_timeout: Optional[Callable[[], None]] = None,
         on_state_change: Optional[Callable[[WakeWordState, WakeWordState], None]] = None,
+        on_barge_in: Optional[Callable[[], None]] = None,
     ):
         self.settings = settings or get_settings()
         self.threshold = self.settings.wake_word_threshold
+        self.aliases: List[str] = getattr(self.settings, "wake_word_aliases", ["jarvis", "jarpis"])
         self.cooldown = self.settings.wake_word_cooldown
         self.silence_timeout = self.settings.wake_word_silence_timeout
         self.speech_start_grace = getattr(self.settings, "wake_word_speech_start_grace", 3.0)
@@ -121,6 +123,7 @@ class WakeWordDetector:
         self.on_command_captured = on_command_captured
         self.on_silence_timeout = on_silence_timeout
         self.on_state_change = on_state_change
+        self.on_barge_in = on_barge_in
 
         self._state = WakeWordState.STOPPED
         self._state_lock = threading.Lock()
@@ -134,9 +137,20 @@ class WakeWordDetector:
         self._stop_event = threading.Event()
 
         # Audio device configuration
-        self.device_index: Optional[int] = self.settings.audio_device
-        self.device_sample_rate = SAMPLE_RATE
-        self.device_channels = 1
+        if self.settings.audio_device is not None:
+            self.device_index = self.settings.audio_device
+            self.device_sample_rate = SAMPLE_RATE
+            self.device_channels = 1
+        else:
+            try:
+                dev, sr, ch = find_working_input_device()
+                self.device_index = dev
+                self.device_sample_rate = sr
+                self.device_channels = ch
+            except Exception:
+                self.device_index = None
+                self.device_sample_rate = SAMPLE_RATE
+                self.device_channels = 1
 
         # Command capture buffers and tracking
         self._preroll_buffer: List[np.ndarray] = []
@@ -144,6 +158,7 @@ class WakeWordDetector:
         self._command_chunks: List[np.ndarray] = []
         self._last_detection_time = 0.0
         self._ambient_rms = 30.0
+        self._score_history: List[float] = []
 
     @property
     def state(self) -> WakeWordState:
@@ -235,9 +250,24 @@ class WakeWordDetector:
         # indata has shape (frames, channels) and dtype int16
         if indata.ndim > 1 and indata.shape[1] > 1:
             # Downmix to mono
-            mono = indata.mean(axis=1).astype(np.int16)
+            mono_f = indata.mean(axis=1).astype(np.float32)
         else:
-            mono = indata.squeeze().astype(np.int16)
+            mono_f = indata.squeeze().astype(np.float32)
+
+        # Remove DC offset (critical for raw WDM-KS/laptop microphones)
+        mono_f = mono_f - float(np.mean(mono_f))
+
+        # Resample to exact 16000Hz mono if device is 44.1kHz or 48kHz
+        if self.device_sample_rate != SAMPLE_RATE and self.device_sample_rate > 0:
+            mono_f = resample_audio(mono_f, self.device_sample_rate, SAMPLE_RATE)
+
+        # Gentle software gain normalization if microphone volume is quiet
+        peak_amp = float(np.max(np.abs(mono_f)))
+        if 5.0 < peak_amp < 10000.0:
+            gain = min(2.0, 10000.0 / max(peak_amp, 100.0))
+            mono_f = mono_f * min(1.8, gain)
+
+        mono = np.clip(mono_f, -32768, 32767).astype(np.int16)
 
         try:
             self._audio_queue.put_nowait(mono)
@@ -287,22 +317,42 @@ class WakeWordDetector:
         self._preroll_buffer.clear()
         self._command_chunks.clear()
 
-        # Start PortAudio Input stream at 16000Hz mono int16
+        # Start PortAudio Input stream at native supported rate, resampled to 16000Hz mono
+        stream_sr = self.device_sample_rate or SAMPLE_RATE
+        block_size = int(CHUNK_SAMPLES * stream_sr / SAMPLE_RATE)
         try:
             self._stream = sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=1,
+                samplerate=stream_sr,
+                channels=min(2, self.device_channels or 1),
                 dtype="int16",
-                blocksize=CHUNK_SAMPLES,
+                blocksize=block_size,
                 device=self.device_index,
                 callback=self._audio_callback,
             )
             self._stream.start()
         except Exception as e:
-            logger.error("Failed to start audio input stream for wake word: %s", e)
-            self._close_stream()
-            self.set_state(WakeWordState.STOPPED)
-            raise
+            logger.warning("Audio device #%s failed (%s); refreshing working device", self.device_index, e)
+            try:
+                dev_idx, sr, ch = find_working_input_device(force_refresh=True)
+                self.device_index = dev_idx
+                self.device_sample_rate = sr
+                self.device_channels = ch
+                stream_sr = self.device_sample_rate or SAMPLE_RATE
+                block_size = int(CHUNK_SAMPLES * stream_sr / SAMPLE_RATE)
+                self._stream = sd.InputStream(
+                    samplerate=stream_sr,
+                    channels=min(2, self.device_channels or 1),
+                    dtype="int16",
+                    blocksize=block_size,
+                    device=self.device_index,
+                    callback=self._audio_callback,
+                )
+                self._stream.start()
+            except Exception as e2:
+                logger.error("Failed to start audio input stream for wake word: %s", e2)
+                self._close_stream()
+                self.set_state(WakeWordState.STOPPED)
+                raise
 
         self._worker_thread = threading.Thread(target=self._run_loop, name="WakeWordWorker", daemon=True)
         self._worker_thread.start()
@@ -344,6 +394,7 @@ class WakeWordDetector:
         self._last_detection_time = time.time()
         self._preroll_buffer.clear()
         self._command_chunks.clear()
+        self._score_history.clear()
         self.set_state(WakeWordState.STANDBY)
         logger.info("WakeWordDetector resumed to STANDBY with cooldown enforced.")
 
@@ -386,14 +437,79 @@ class WakeWordDetector:
 
             current_state = self.state
 
-            # Discard frames when paused, processing command, speaking response, or recovering
+            # Discard frames when paused, processing command, or recovering
             if current_state in (
                 WakeWordState.PAUSED,
                 WakeWordState.PROCESSING_COMMAND,
-                WakeWordState.SPEAKING,
                 WakeWordState.RECOVERING,
                 WakeWordState.STOPPED,
             ):
+                continue
+
+            # State 0: SPEAKING (Barge-In / interruption detection while JARVIS is speaking)
+            if current_state == WakeWordState.SPEAKING:
+                if self._model is not None and self._model_key is not None:
+                    try:
+                        preds = self._model.predict(chunk)
+                        score = float(preds.get(self._model_key, 0.0))
+                    except Exception as e:
+                        score = 0.0
+
+                    self._score_history.append(score)
+                    if len(self._score_history) > 3:
+                        self._score_history.pop(0)
+
+                    peak_recent = max(self._score_history) if self._score_history else score
+                    if score >= self.threshold or peak_recent >= self.threshold:
+                        logger.info(
+                            "[BARGE-IN] Wake interruption detected during SPEAKING (confidence=%.3f, peak=%.3f, threshold=%.2f)",
+                            score,
+                            peak_recent,
+                            self.threshold,
+                        )
+                        self._last_detection_time = time.time()
+                        self._score_history.clear()
+
+                        # 1. Immediately halt audio playback / TTS
+                        if self.on_barge_in:
+                            try:
+                                self.on_barge_in()
+                            except Exception as bi_err:
+                                logger.error("Error in on_barge_in callback: %s", bi_err)
+
+                        # 2. Transition to WAKE_DETECTED and play confirmation chime
+                        self.set_state(WakeWordState.WAKE_DETECTED)
+                        if self.on_wake_word:
+                            try:
+                                self.on_wake_word(score)
+                            except Exception:
+                                pass
+
+                        play_chime(blocking=True)
+                        time.sleep(0.04)
+
+                        # Purge residual chime frames
+                        while not self._audio_queue.empty():
+                            try:
+                                self._audio_queue.get_nowait()
+                            except queue.Empty:
+                                break
+
+                        self._command_chunks.clear()
+                        self._preroll_buffer.clear()
+                        if self._model:
+                            self._model.reset()
+
+                        # 3. Transition directly to WAITING_FOR_SPEECH to capture new user command
+                        self.set_state(WakeWordState.WAITING_FOR_SPEECH)
+                        speech_started = False
+                        consecutive_silence_chunks = 0
+                        command_start_monotonic = time.monotonic()
+                        logger.info(
+                            "[BARGE-IN] Transitioned to WAITING_FOR_SPEECH (grace_period=%.1fs)",
+                            self.speech_start_grace,
+                        )
+                        continue
                 continue
 
             # State 1: STANDBY (Listening for wake word)
@@ -423,12 +539,28 @@ class WakeWordDetector:
                     logger.debug("Inference error in openWakeWord predict: %s", e)
                     score = 0.0
 
-                if score >= self.threshold:
+                self._score_history.append(score)
+                if len(self._score_history) > 3:
+                    self._score_history.pop(0)
+
+                # Detection trigger: either single peak over threshold, or sustained multi-frame
+                # confidence for standalone "Jarvis" / "Jarpis"
+                peak_recent = max(self._score_history) if self._score_history else score
+                sustained = (
+                    len(self._score_history) >= 2
+                    and (sum(self._score_history[-2:]) / 2.0) >= (self.threshold * 0.85)
+                    and chunk_rms > max(15.0, self._ambient_rms * 1.05)
+                )
+                is_detected = (score >= self.threshold) or (peak_recent >= self.threshold) or sustained
+
+                if is_detected:
                     self._last_detection_time = time.time()
+                    self._score_history.clear()
                     logger.info(
-                        "[WAKE] Detected model=%s, confidence=%.3f (threshold=%.2f)",
+                        "[WAKE] Detected model=%s, confidence=%.3f, peak=%.3f (threshold=%.2f)",
                         self._model_key,
                         score,
+                        peak_recent,
                         self.threshold,
                     )
 
@@ -483,8 +615,8 @@ class WakeWordDetector:
                 chunk_rms = float(np.sqrt(np.mean(chunk_f ** 2)))
 
                 # Dynamic VAD thresholds adapted from ambient noise floor
-                speech_start_threshold = max(45.0, self._ambient_rms * 1.3)
-                silence_threshold = max(28.0, self._ambient_rms * 1.1)
+                speech_start_threshold = max(35.0, self._ambient_rms * 1.2)
+                silence_threshold = max(24.0, self._ambient_rms * 1.05)
 
                 if current_state == WakeWordState.WAITING_FOR_SPEECH:
                     elapsed_wait = time.monotonic() - command_start_monotonic

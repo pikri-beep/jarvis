@@ -129,6 +129,39 @@ class TestWebSearchSpoken(unittest.TestCase):
         response2 = "".join(list(stream2))
         self.assertIn("ai.example.org", response2)
 
+    def test_search_followup_with_search_result_objects(self):
+        """Regression test: follow-up execution must handle SearchResult dataclass instances without AttributeError."""
+        self.orchestrator.state.set_last_search(
+            query="Perkembangan AI",
+            spoken_answer="AI makin canggih.",
+            display_answer="AI makin canggih.",
+            sources=[
+                SearchResult(
+                    title="Perkembangan AI",
+                    url="https://aici-umg.com/article/perkembangan-ai/",
+                    snippet="Perkembangan AI membawa dampak signifikan.",
+                    domain="aici-umg.com",
+                ),
+                SearchResult(
+                    title="Berita OpenAI",
+                    url="https://openai.com/id-ID/news/",
+                    snippet="Berita terbaru dari OpenAI.",
+                    domain="openai.com",
+                ),
+            ],
+        )
+
+        # list_search_sources
+        _, stream = self.orchestrator.process_input_stream("apa sumber informasi tadi?")
+        response = "".join(list(stream))
+        self.assertIn("aici-umg.com", response)
+        self.assertIn("openai.com", response)
+
+        # read_search_source_snippet
+        _, stream2 = self.orchestrator.process_input_stream("bacakan sumber pertama")
+        response2 = "".join(list(stream2))
+        self.assertIn("Perkembangan AI membawa dampak signifikan", response2)
+
     @patch("requests.get", side_effect=Exception("Connection timed out"))
     def test_network_failure_reported_honestly(self, mock_get):
         """When web request fails, it must report the failure honestly without hallucinating."""

@@ -9,11 +9,11 @@ def test_default_settings():
     with patch.dict(os.environ, {}, clear=True):
         settings = Settings()
         assert settings.jarvis_name == "Jarvis"
-        assert settings.model == "qwen3:8b"
+        assert settings.model == "qwen2.5:1.5b"
         assert settings.ollama_url == "http://localhost:11434"
         assert settings.keep_alive == "15m"
         assert settings.think_mode is False
-        assert settings.stt_model == "base"
+        assert settings.stt_model == "small"
         assert settings.stt_device == "cpu"
         assert settings.stt_compute_type == "int8"
         assert settings.tts_enabled is False
