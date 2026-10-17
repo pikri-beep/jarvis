@@ -638,6 +638,51 @@ class CommandRouter:
                 description=f"Vision Agent Timer: {t_full_goal}",
             )
 
+        # PocketDesk Remote Control (e.g. "nyalakan remote", "aktifkan remote server", "matikan remote", "status remote", "apakah remote aktif")
+        if re.search(
+            r"^(?:(?:tolong\s+)?(?:nyalakan|aktifkan|hidupkan|jalankan|buka|start|launch)\s+(?:server\s+remote|remote\s+server|remote|pocketdesk(?:\s+remote)?)|"
+            r"(?:server\s+remote|remote\s+server|remote|pocketdesk)\s+on)$",
+            normalized,
+            re.IGNORECASE,
+        ):
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="start_remote_server",
+                args={},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description="Start PocketDesk Remote server",
+            )
+
+        if re.search(
+            r"^(?:(?:tolong\s+)?(?:matikan|nonaktifkan|hentikan|tutup|stop|close)\s+(?:server\s+remote|remote\s+server|remote|pocketdesk(?:\s+remote)?)|"
+            r"(?:server\s+remote|remote\s+server|remote|pocketdesk)\s+off)$",
+            normalized,
+            re.IGNORECASE,
+        ):
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="stop_remote_server",
+                args={},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description="Stop PocketDesk Remote server",
+            )
+
+        if re.search(
+            r"^(?:(?:cek|lihat|status|periksa|apakah)\s+(?:server\s+remote|remote\s+server|remote|pocketdesk(?:\s+remote)?)(?:\s+(?:aktif|hidup|jalan|running))?|"
+            r"(?:server\s+remote|remote\s+server|remote|pocketdesk)\s+status)$",
+            normalized,
+            re.IGNORECASE,
+        ):
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="get_remote_server_status",
+                args={},
+                raw_input=cleaned,
+                normalized_input=normalized,
+            )
+
         # Workspace Janitor Commands (e.g. "rapikan folder downloads", "rapikan desktop", "organize downloads")
         m_janitor = re.match(
             r"^(?:rapikan|bersihkan|organisir|organize|clean)\s+(?:folder\s+)?(downloads?|unduhan|desktop|layar\s+utama)$",

@@ -87,6 +87,13 @@ class JarvisMainWindow(QMainWindow):
         self.input_pill = InputPill(self)
         self.input_pill.hide()
 
+        # Start background Remote IPC Gateway for PocketDesk Remote mobile connection
+        try:
+            from app.core.remote_gateway import start_remote_gateway
+            start_remote_gateway(self.orchestrator)
+        except Exception as e:
+            logger.warning("Could not start remote gateway: %s", e)
+
         self._init_ui()
         self._init_system_tray()
         self._init_global_hotkey()

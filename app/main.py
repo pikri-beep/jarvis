@@ -519,6 +519,9 @@ def main() -> None:
     args = parser.parse_args()
 
     orchestrator = Orchestrator()
+    from app.core.remote_gateway import start_remote_gateway
+    start_remote_gateway(orchestrator)
+
     wake_enabled = args.wake or orchestrator.settings.wake_word_enabled
     voice_enabled = args.voice or orchestrator.settings.voice_enabled
 

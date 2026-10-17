@@ -208,4 +208,29 @@ Keamanan data komputer Anda adalah prioritas utama:
 
 ---
 
+## 📱 8. Kontrol Jarak Jauh dari Smartphone (PocketDesk Remote Integration)
+
+Anda dapat mengontrol laptop dan berbicara langsung dengan JARVIS dari smartphone (Android / iOS) melalui browser tanpa perlu menginstall aplikasi tambahan di HP!
+
+### Cara Menggunakan:
+1. **Nyalakan Remote Server**:
+   - Cukup katakan ke JARVIS di laptop: *"Jarvis, nyalakan remote"* atau ketik `nyalakan remote`.
+   - JARVIS akan meluncurkan PocketDesk Remote dan memberikan alamat URL lokal (misalnya: `http://192.168.1.x:8000/remote`).
+2. **Buka di Smartphone**:
+   - Pastikan smartphone dan laptop terhubung ke jaringan Wi-Fi yang sama.
+   - Pindai QR Code dari layar laptop atau ketik URL tersebut di Google Chrome / Safari smartphone Anda.
+3. **Buka Deck JARVIS di Smartphone**:
+   - Ketuk tombol **`🤖 JARVIS`** di bottom dock atau di header remote.
+   - Deck asisten pintar JARVIS akan muncul seketika dengan status indikator hijau (`ONLINE`).
+4. **Instruksi Suara dari HP (Push-to-Talk)**:
+   - Tahan tombol mikrofon bulat cyan di HP untuk bicara (misalnya: *"Buka Chrome"*, *"Putar lagu Yellow Coldplay"*, *"Catat todo bayar tagihan"*).
+   - Suara Anda direkam secara lokal dalam format PCM 16kHz WAV dan ditranskripsi oleh engine Whisper JARVIS di laptop (100% privat & offline).
+5. **Memilih Output Suara (Speaker Laptop vs HP)**:
+   - Tekan toggle **`[ 🔊 Laptop ]`** jika ingin suara balasan JARVIS dibacakan dari speaker laptop.
+   - Tekan toggle **`[ 📱 HP ]`** jika ingin suara balasan JARVIS langsung terdengar keluar dari speaker smartphone Anda!
+6. **Nyalakan JARVIS dari HP**:
+   - Jika JARVIS di laptop sedang tertutup/offline, deck JARVIS di HP akan menampilkan tombol merah **`[ ⚡ Nyalakan ]`** untuk membangunkan JARVIS di laptop secara remote.
+
+---
+
 *Selamat bekerja lebih produktif bersama JARVIS — Asisten AI Windows Pribadi Anda!* 🚀

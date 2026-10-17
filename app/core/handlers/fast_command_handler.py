@@ -872,6 +872,53 @@ def handle_fast_command(
             reply_chunks.append(out)
             yield out
 
+        elif route.action == "start_remote_server":
+            from app.tools.remote_server import start_remote_server
+            try:
+                ok, url, msg = start_remote_server()
+                elapsed_ms = (time.time() - tool_start) * 1000.0
+                logger.info('[TOOL] name="start_remote_server" ok=%s url="%s" latency=%.1fms', ok, url, elapsed_ms)
+                out = msg
+            except Exception as exc:
+                logger.exception('[TOOL] name="start_remote_server" status="FAILURE" exception="%s"', exc)
+                out = f"Maaf sir, gagal menyalakan server remote: {exc}" if is_id else f"Sorry sir, could not start remote server: {exc}"
+            reply_chunks.append(out)
+            yield out
+
+        elif route.action == "stop_remote_server":
+            from app.tools.remote_server import stop_remote_server
+            try:
+                ok, msg = stop_remote_server()
+                elapsed_ms = (time.time() - tool_start) * 1000.0
+                logger.info('[TOOL] name="stop_remote_server" ok=%s latency=%.1fms', ok, elapsed_ms)
+                out = msg
+            except Exception as exc:
+                logger.exception('[TOOL] name="stop_remote_server" status="FAILURE" exception="%s"', exc)
+                out = f"Maaf sir, gagal mematikan server remote: {exc}" if is_id else f"Sorry sir, could not stop remote server: {exc}"
+            reply_chunks.append(out)
+            yield out
+
+        elif route.action == "get_remote_server_status":
+            from app.tools.remote_server import get_remote_server_status
+            try:
+                st = get_remote_server_status()
+                if st["running"]:
+                    out = (
+                        f"Server PocketDesk Remote sedang aktif di {st['url']}, sir. Anda dapat memberikan instruksi suara atau ketikan langsung dari smartphone."
+                        if is_id
+                        else f"PocketDesk Remote server is active at {st['url']}, sir. You can control JARVIS directly from your smartphone."
+                    )
+                else:
+                    out = (
+                        "Server PocketDesk Remote sedang tidak aktif, sir. Katakan 'aktifkan remote' untuk menyalakannya."
+                        if is_id
+                        else "PocketDesk Remote server is currently offline, sir. Say 'start remote' to launch it."
+                    )
+            except Exception as exc:
+                out = f"Gagal memeriksa status remote: {exc}"
+            reply_chunks.append(out)
+            yield out
+
         elif route.action == "clean_workspace":
             from app.tools.janitor import clean_workspace
             target = route.args.get("target", "downloads")
