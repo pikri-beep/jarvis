@@ -97,8 +97,8 @@ def normalize_command_text(user_input: str) -> str:
 
     low = s.lower()
 
-    # 2.5. Remove stray mid-utterance punctuation from STT early (e.g. 'Play, grip.', 'Buka, Chrome')
-    low = re.sub(r'[,;:]+', ' ', low)
+    # 2.5. Remove stray mid-utterance punctuation from STT early, preserving colons in times (e.g. '14:20')
+    low = re.sub(r'(?<!\d):|:(?!\d)|[,;]+', ' ', low)
 
     # 3. Strip wake word, salutations, & modal courtesy prefixes
     low = re.sub(
@@ -203,22 +203,80 @@ def clean_target_identifier(raw_target: str) -> str:
 
 
 def clean_search_query_arg(q: str) -> str:
-    """Cleans extracted search query removing filler prepositions, particles, and quotes."""
+    """Cleans extracted search query removing search command verbs, platform references, fillers, and quotes."""
     if not q:
         return ""
     s = q.strip()
     s = re.sub(r'^[«»"\'“”‘’]+|[«»"\'“”‘’]+$', '', s).strip()
     s = re.sub(r'[\.\?!,;:]+$', '', s).strip()
-    # Strip leading prepositions/fillers that might have been captured
-    s = re.sub(
-        r'^(?:tentang|mengenai|soal|seputar|informasi\s+tentang|info\s+tentang|berita\s+tentang|berita\s+terbaru\s+tentang|for|about|on)\s+',
-        '',
-        s,
-        flags=re.IGNORECASE,
-    ).strip()
-    # Strip trailing courtesy words
-    s = re.sub(r'\s+(?:dong(?:\s+ya)?|ya(?:\s+dong)?|deh|lah|sih|nih|please|now)$', '', s, flags=re.IGNORECASE).strip()
+
+    # Iteratively strip leading command verbs and prepositions
+    leading_verbs_pat = (
+        r'^(?:(?:tolong\s+)?(?:search|cari(?:kan)?|googling|google|find|look\s+up)(?:\s+(?:di|in|on)\s+(?:google|internet|web|browser))?'
+        r'(?:\s+(?:the\s+web\s+for|on\s+the\s+web\s+for|online\s+for|google\s+for|for|about|on))?\s*|'
+        r'(?:tentang|mengenai|soal|seputar|informasi\s+tentang|info\s+tentang|berita\s+tentang|berita\s+terbaru\s+tentang|for|about|on)\s+)'
+    )
+    for _ in range(3):
+        m = re.match(leading_verbs_pat, s, flags=re.IGNORECASE)
+        if m:
+            s = s[m.end():].strip()
+        else:
+            break
+
+    # Strip trailing platform terms and courtesy words
+    trailing_pat = (
+        r'\s+(?:di\s+(?:google|internet|web|bing|browser)|in\s+google|on\s+google|lewat\s+google|on\s+the\s+web|online|'
+        r'dong(?:\s+ya)?|ya(?:\s+dong)?|deh|lah|sih|nih|please|now)$'
+    )
+    for _ in range(3):
+        m = re.search(trailing_pat, s, flags=re.IGNORECASE)
+        if m:
+            s = s[:m.start()].strip()
+        else:
+            break
+
+    s = re.sub(r'^[«»"\'“”‘’]+|[«»"\'“”‘’]+$', '', s).strip()
     return s.strip()
+
+
+def is_multi_step_or_implicit_intent(normalized: str, raw_input: str) -> bool:
+    """Detects multi-step commands, complex goals, or implicit situation/error statements.
+
+    Routes these to the Autonomous AI Agent Loop (AI_REQUEST) rather than forcing rigid
+    single-step fast commands or failing with app_not_found.
+    """
+    low = normalized.lower().strip()
+
+    # Exception: Contextual button chaining handled deterministically by TaskExecutor ("klik tombol ... lalu lanjutkan")
+    if low.startswith("klik") and ("lalu lanjutkan" in low or "kemudian lanjutkan" in low):
+        return False
+
+    # 1. Multi-step conjunctions (e.g. 'lalu', 'kemudian', 'setelah itu', 'terus', 'sambil', 'dan lalu', 'and then', 'then')
+    if re.search(r"\b(?:lalu|kemudian|setelah\s+itu|terus|sambil|dan\s+lalu|dan\s+kemudian)\b", low):
+        return True
+    if re.search(r"\b(?:and\s+then|then|after\s+that|followed\s+by)\b", low):
+        return True
+
+    # 2. Implicit user situation or open-ended goals (e.g. 'aku mau lanjut ngerjain tugas', 'mau belajar', 'mau kerja')
+    if re.search(
+        r"\b(?:aku|saya|gue|gw)?\s*mau\s+(?:lanjut\s+)?(?:ngerjain\s+tugas|kerja|belajar|ngoding|kuliah|tugas|bikin|buat\s+proyek)\b",
+        low,
+    ):
+        return True
+    if re.search(
+        r"\b(?:i\s+want\s+to|i\s+need\s+to|let's)\s+(?:continue\s+)?(?:work|my\s+task|homework|study|coding)\b",
+        low,
+    ):
+        return True
+
+    # 3. Implicit screen error, glitch, or diagnostic statements (e.g. 'layarku kok error gini ya', 'layar error')
+    if re.search(
+        r"\b(?:layar(?:ku)?\s+(?:kok|kenapa|ada|lagi)?\s*error|error\s+(?:gini|ini|di\s+layar)|kok\s+error|kenapa\s+(?:layar|muncul\s+error)|ada\s+masalah\s+di\s+layar|screen\s+(?:error|glitch|freeze|issue)|why\s+is\s+my\s+screen|something\s+wrong\s+with\s+(?:my\s+)?screen)\b",
+        low,
+    ):
+        return True
+
+    return False
 
 
 class CommandRouter:
@@ -234,6 +292,10 @@ class CommandRouter:
         "help": "help",
         "/help": "help",
         "?": "help",
+        "cheat": "cheatsheet",
+        "/cheat": "cheatsheet",
+        "cheatsheet": "cheatsheet",
+        "/cheatsheet": "cheatsheet",
         "clear": "clear",
         "/clear": "clear",
         "cls": "clear",
@@ -303,7 +365,11 @@ class CommandRouter:
             "get_date",
         ),
         # System & Battery Specs
-        (r"^(?:system\s+(?:info|information|specs|status)|pc\s+info|info\s+sistem)$", "system_info"),
+        (
+            r"^(?:(?:cek|lihat|tampilkan|periksa|check|show|view|get)\s+)?(?:info|informasi|spesifikasi|status|spek|specs|information)\s*(?:sistem|komputer|laptop|pc|system|device|perangkat)?$|"
+            r"^(?:system\s+(?:info|information|specs|status)|pc\s+info|info\s+sistem|spesifikasi(?:\s+sistem)?|spek(?:\s+sistem)?|spek\s+laptop|spek\s+pc)$",
+            "system_info",
+        ),
         (r"^(?:(?:cek|lihat|periksa|berapa|status|sisa|info)\s+baterai(?:\s+(?:ku|saya|laptop|ini|sekarang))?|baterai(?:\s+(?:ku|saya|sekarang))?|battery(?:\s+(?:status|level|percentage|info|now))?|power\s+status|status\s+baterai|how\s+much\s+battery)$", "battery_status"),
         # Screen & Audio control
         (r"^(?:(?:take|capture|ambil)\s+(?:a\s+)?(?:screenshot|tangkapan\s+layar)(?:\s+(?:layar(?:ku|\s+ku)?|screen|my\s+screen))?|screenshot(?:\s+(?:layar(?:ku|\s+ku)?|screen|my\s+screen))?|tangkapan\s+layar(?:\s+(?:ku|saya))?)$", "take_screenshot"),
@@ -316,7 +382,7 @@ class CommandRouter:
         (r"^(?:(?:resume|lanjutkan)\s+(?:the\s+)?(?:music|song|track|playback|video|media|lagu(?:nya)?|musik(?:nya)?|it)|resume\s+it|resume\s+playback|resume\s+the\s+music|lanjutkan\s+musik(?:nya)?|lanjutkan\s+lagu(?:nya)?|resume\s+lagu(?:nya)?|resume|resume\s+music)$", "media_play_pause"),
         (r"^(?:next(?:\s+track|\s+song)?|skip(?:\s+the\s+song|\s+track|\s+song)?|lagu\s+berikutnya|lagu\s+selanjutnya|trek\s+berikutnya|skip)$", "media_next"),
         (r"^(?:stop(?:\s+the\s+)?(?:music|song|playback|it)|hentikan\s+(?:musik|lagu)(?:nya)?|stop\s+music)$", "media_stop"),
-        (r"^(?:stop|berhenti|cukup|diam|cancel|batal|stop\s+bicara|jangan\s+bicara)$", "stop_speech"),
+        (r"^(?:stop|berhenti|cukup|diam|cancel|batal|stop\s+bicara|jangan\s+bicara|berhenti\s+ngomong|stop\s+talking|shut\s+up|hush|silent)$", "stop_speech"),
         # Browser Tab & Navigation Control
         (r"^(?:(?:buka\s+)?tab\s+baru|open\s+(?:a\s+)?new\s+tab|new\s+tab)$", "open_new_tab"),
         (r"^(?:tutup\s+tab(?:\s+ini)?|close\s+(?:this\s+)?tab)$", "close_tab"),
@@ -354,7 +420,8 @@ class CommandRouter:
 
     # Conversational markers: Prevent deterministic commands from triggering on inquiries or negations
     _CONVERSATIONAL_MARKERS = [
-        r"\b(?:jangan|don'?t|do not|tidak usah|batal(?:kan)?|never|tidak boleh|stop)\b",
+        r"^(?:jangan|don'?t|do\s+not|tidak\s+usah|batal(?:kan)?|tidak\s+boleh)\s+",
+        r"^(?:jangan|batal|cancel|stop)$",
         r"\b(?:bagaimana(?:\s+cara)?|cara(?:\s+kerja|\s+buka|\s+menggunakan)?|how\s+to|how\s+do\s+i|how\s+does)\b",
         r"\b(?:kenapa|mengapa|why|apakah|perbedaan|difference|compare|versus|vs|definisi|definition)\b",
         r"\b(?:jelaskan|explain|ceritakan|tell\s+me\s+about|tell\s+me\s+(?!the\s+time|the\s+date|the\s+day|time|date))\b",
@@ -571,6 +638,138 @@ class CommandRouter:
                 description=f"Vision Agent Timer: {t_full_goal}",
             )
 
+        # Workspace Janitor Commands (e.g. "rapikan folder downloads", "rapikan desktop", "organize downloads")
+        m_janitor = re.match(
+            r"^(?:rapikan|bersihkan|organisir|organize|clean)\s+(?:folder\s+)?(downloads?|unduhan|desktop|layar\s+utama)$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if m_janitor:
+            raw_target = m_janitor.group(1).lower()
+            target_folder = "desktop" if "desktop" in raw_target or "layar" in raw_target else "downloads"
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="clean_workspace",
+                args={"target": target_folder},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description=f"Workspace Janitor: clean {target_folder}",
+            )
+
+        # 1.44. Todo & Notes Commands
+        # A. Todo Listing / Inquiries (e.g. "daftar tugas", "daftar todo", "lihat tugas", "cek todo", "ada tugas apa", "show todos", "task list", "/todo")
+        is_list_todos = bool(
+            re.match(
+                r"^(?:(?:tolong\s+)?(?:tampilkan|lihat|cek|buka|show|view|get|list)\s+(?:daftar\s+)?(?:tugas|todos?|to-do|to\s+do|catatan|tasks?)|"
+                r"daftar\s+(?:tugas|todos?|to-do|to\s+do|catatan|tasks?)|"
+                r"(?:task|tasks|todo|todos|to-do|to\s+do)\s+list|"
+                r"(?:ada\s+)?(?:tugas|todo|catatan)\s+apa(?:\s+saja)?|"
+                r"apa(?:\s+saja)?\s+(?:daftar\s+)?(?:tugas(?:ku)?|todo(?:ku)?|catatan(?:ku)?)(?:\s+(?:saya|aku|gue|gw))?(?:\s+hari\s+ini)?|"
+                r"(?:tugas(?:ku)?|todo(?:ku)?)(?:\s+(?:saya|aku|gue|gw))?\s+apa(?:\s+saja)?|"
+                r"(?:my\s+tasks?|my\s+todos?|all\s+tasks?|all\s+todos?)|"
+                r"(?:/todo|/todos|/tasks|todo|todos|tasks))$",
+                normalized,
+                re.IGNORECASE,
+            )
+        )
+        if is_list_todos:
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="list_todos",
+                args={},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description="List active user todos",
+            )
+
+        # B. Todo Completion (e.g. "selesaikan tugas 1", "centang todo 2")
+        m_complete_todo = re.match(
+            r"^(?:(?:tolong\s+)?(?:selesaikan|centang|tandai\s+selesai|complete|finish|check\s+off)\s+(?:tugas|todo|task)?\s*(?:#|nomor|no)?\s*(\d+))$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if m_complete_todo:
+            num = int(m_complete_todo.group(1))
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="complete_todo",
+                args={"task_number": num},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description=f"Complete todo #{num}",
+            )
+
+        # C1. Clear All Todos (e.g. "hapus semua todo", "hapus semua tugas", "kosongkan todo", "clear all todos")
+        if re.search(
+            r"^(?:(?:tolong\s+)?(?:hapus|bersihkan|kosongkan|clear|delete)\s+(?:semua\s+)?(?:daftar\s+)?(?:tugas|todo|todos|to-do|to\s+do|tasks?)|"
+            r"(?:clear|delete)\s+all(?:\s+(?:todos?|tasks?))?)$",
+            normalized,
+            re.IGNORECASE,
+        ):
+            if "selesai" not in normalized.lower() and "completed" not in normalized.lower() and not re.search(r"\d+", normalized):
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action="clear_all_todos",
+                    args={},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description="Clear all user todos",
+                )
+
+        # C2. Clear Completed Todos (e.g. "hapus todo selesai", "bersihkan tugas yang selesai")
+        if re.search(
+            r"^(?:(?:tolong\s+)?(?:hapus|bersihkan|clear)\s+(?:semua\s+)?(?:tugas|todo|tasks?)\s+(?:yang\s+)?(?:sudah\s+)?selesai|clear\s+completed(?:\s+todos?)?)$",
+            normalized,
+            re.IGNORECASE,
+        ):
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="clear_completed_todos",
+                args={},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description="Clear completed todos",
+            )
+
+        # D. Todo Capture (e.g. "catat todo: bayar tagihan", "tambah tugas: kirim email", "ingatkan saya jam 14.20 beli makan")
+        m_todo = re.match(
+            r"^(?:(?:tolong\s+)?(?:catat(?:kan)?|tambah(?:kan)?)\s*(?:todo|to-do|to\s+do|tugas|catatan)?|todo|tugas|catatan)(?:\s*:\s*|\s+)(.+)$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if not m_todo:
+            m_remind = re.match(
+                r"^(?:tolong\s+)?ingatkan\s+(?:saya|aku|kami)?\s*(?:untuk\s+)?(.+)$",
+                normalized,
+                re.IGNORECASE,
+            )
+            if m_remind:
+                m_todo = m_remind
+
+        if m_todo:
+            task_text = m_todo.group(1).strip()
+            if not re.match(r"^(?:apa(?:\s+saja)?|yang\s+ada|hari\s+ini)$", task_text, re.IGNORECASE):
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action="add_todo",
+                    args={"task": task_text},
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description=f"Todo add: {task_text}",
+                )
+
+        # 1.45. Multi-step Instructions, Complex Goals, or Implicit Diagnostic Intent -> Autonomous Agentic Loop
+        if is_multi_step_or_implicit_intent(normalized, cleaned):
+            return RouteResult(
+                route_type=RouteType.AI_REQUEST,
+                action="agentic_task",
+                args={"goal": cleaned},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description=f"Autonomous Agentic Task: {cleaned}",
+                confidence=0.95,
+            )
+
         # 1.5. On-Demand Screen Reading (Explicit user intent only)
         for pattern, action, pref_vis in self._SCREEN_PATTERNS:
             if re.search(pattern, normalized):
@@ -596,12 +795,13 @@ class CommandRouter:
                 )
 
         m_src = re.match(
-            r"^(?:(buka|open|bacakan|read)\s+(?:sumber|hasil(?:\s+pencarian)?|artikel|the\s+result|the\s+article|the\s+source|result|article|source)?\s*(pertama|kedua|ketiga|ke-?1|ke-?2|ke-?3|1|2|3|first|second|third|1st|2nd|3rd|source\s+1|source\s+2)(?:\s*(?:source|artikel|hasil|result|article))?)$",
+            r"^(?:(?:(buka|open|bacakan|read|tampilkan|lihat|ke|menuju|pindah\s+ke|go\s+to)\s+)?(?:ke\s+)?(?:sumber|hasil(?:\s+pencarian)?|artikel|link|tautan|the\s+result|the\s+article|the\s+source|result|article|source|nomor|no)?\s*(?:ke-?|nomor\s+|no\.?\s*)?(pertama|kedua|ketiga|1|2|3|first|second|third|1st|2nd|3rd|source\s+1|source\s+2)(?:\s*(?:source|artikel|hasil|result|article|link|tautan))?)$",
             normalized,
             re.IGNORECASE,
         )
         if m_src:
-            verb = (m_src.group(1) or "buka").lower()
+            raw_verb = m_src.group(1) or ""
+            verb = raw_verb.lower().strip()
             w = m_src.group(2)
             idx_map = {
                 "pertama": 1, "ke-1": 1, "ke1": 1, "1": 1, "first": 1, "1st": 1, "source 1": 1,
@@ -1128,7 +1328,18 @@ class CommandRouter:
                         description=f"Fast command: open_start_menu_app ({hit_name})",
                     )
 
-                # Case F: Unknown target - Honest rejection at router level (zero LLM leakage)
+                # Case F: Unknown target or complex phrase
+                if is_multi_step_or_implicit_intent(cleaned_target, cleaned) or len(cleaned_target.split()) >= 3:
+                    return RouteResult(
+                        route_type=RouteType.AI_REQUEST,
+                        action="agentic_task",
+                        args={"goal": cleaned},
+                        raw_input=cleaned,
+                        normalized_input=normalized,
+                        description=f"Autonomous Agentic Task: {cleaned}",
+                        confidence=0.85,
+                    )
+
                 return RouteResult(
                     route_type=RouteType.FAST_COMMAND,
                     action="app_not_found",

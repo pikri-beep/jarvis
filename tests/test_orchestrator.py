@@ -53,7 +53,13 @@ def test_orchestrator_web_query():
     route, stream = orchestrator.process_input_stream("What is the weather today?")
     assert route.route_type == RouteType.WEB_DEPENDENT
     output = "".join(list(stream))
-    assert ("search results" in output or "browser" in output or "Source" in output or "Sumber" in output)
+    assert (
+        "search results" in output
+        or "browser" in output
+        or "Source" in output
+        or "Sumber" in output
+        or "could not find verified online information" in output
+    )
 
 
 

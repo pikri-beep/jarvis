@@ -8,6 +8,50 @@ from app.core.router import RouteResult
 logger = setup_logger("jarvis.handlers.terminal")
 
 
+def _get_jarvis_cheatsheet() -> str:
+    """Returns the comprehensive, beautifully formatted JARVIS command cheatsheet."""
+    return (
+        "================================================================================\n"
+        "                    ⚡ JARVIS // QUICK CHEATSHEET & COMMANDS ⚡\n"
+        "================================================================================\n\n"
+        "[ 🌐 WEB & BROWSING ]\n"
+        "  • search <topik> / cari <topik> di google  -> Buka Google Search di browser & sumber senyap\n"
+        "  • buka YouTube / buka GitHub / buka <url>  -> Buka website di browser default\n"
+        "  • sumber 1 / tolong ke sumber pertama      -> Buka tautan sumber hasil pencarian\n\n"
+        "[ 🎵 MULTIMEDIA & AUDIO ]\n"
+        "  • play lagu <judul> / putar <video>        -> Putar audio/video YouTube secara instan\n"
+        "  • pause / lanjutkan / stop musik           -> Kendalikan pemutaran media aktif\n"
+        "  • volume up / volume down / volume 50%     -> Atur volume suara komputer\n"
+        "  • mute / senyap / unmute                   -> Senyapkan / bunyikan audio Windows\n\n"
+        "[ 📝 TODO & PROACTIVE REMINDERS ]\n"
+        "  • catat todo: jam 14.20 beli makan         -> Catat to-do & otomatis ingatkan saat tiba\n"
+        "  • tampilkan todo / daftar tugas            -> Lihat semua daftar tugas aktif\n"
+        "  • selesaikan todo #1 / hapus todo #1       -> Tandai tugas selesai atau hapus\n\n"
+        "[ 💻 KONTROL APLIKASI & WINDOWS ]\n"
+        "  • buka Chrome / buka Spotify / buka VS Code-> Buka aplikasi komputer\n"
+        "  • tutup Chrome / tutup Notepad             -> Tutup aplikasi komputer\n"
+        "  • rapikan Downloads / rapikan Desktop      -> Janitor merapikan file berdasarkan ekstensi\n"
+        "  • cek spesifikasi / info sistem            -> Lihat info CPU, RAM, OS, dan GPU\n"
+        "  • kunci komputer / lock Windows            -> Kunci layar Windows 11\n"
+        "  • take screenshot / ambil screenshot       -> Tangkap tangkapan layar desktop\n\n"
+        "[ 👁️ VISION & INSPEKSI LAYAR ]\n"
+        "  • baca layar / ada apa di layar?           -> Baca dan pahami teks pada jendela aktif\n"
+        "  • ada error apa di layar?                  -> Diagnosa pesan error yang tampil di layar\n\n"
+        "[ ⏹️ KONTROL SUARA & EMERGENCY STOP ]\n"
+        "  • Tombol [Esc] atau tombol [⏹️ STOP]       -> Hentikan suara JARVIS seketika (0 ms)\n"
+        "  • Kirim perintah baru saat bicara          -> Otomatis potong ucapan sebelumnya\n\n"
+        "[ ⚡ TERMINAL & SLASH COMMANDS ]\n"
+        "  • /cheat, /cheatsheet                      -> Tampilkan cheatsheet ini (senyap tanpa suara)\n"
+        "  • /help                                    -> Ringkasan bantuan perintah sistem\n"
+        "  • /status                                  -> Status sistem, model LLM, CPU & RAM\n"
+        "  • /diag                                    -> Diagnostik performa latensi & audio\n"
+        "  • /tts                                     -> Aktifkan / matikan keluaran suara (Piper TTS)\n"
+        "  • /wake                                    -> Aktifkan / matikan deteksi 'Hey Jarvis'\n"
+        "  • /clear                                   -> Bersihkan layar terminal console\n"
+        "================================================================================"
+    )
+
+
 def handle_terminal_command(
     orchestrator: Any,
     route: RouteResult,
@@ -17,9 +61,12 @@ def handle_terminal_command(
 ) -> Tuple[RouteResult, Generator[str, None, None]]:
     """Handles terminal REPL built-in commands (/help, /status, /diag, /exit, etc.)."""
     def _terminal_gen():
-        if route.action == "help":
+        if route.action in ("cheatsheet", "cheat"):
+            yield _get_jarvis_cheatsheet()
+        elif route.action == "help":
             yield (
                 "Commands available:\n"
+                "  /cheat, /cheatsheet- Show comprehensive JARVIS command cheatsheet\n"
                 "  /help, help        - Show this help message\n"
                 "  /status, status    - Show system and model status\n"
                 "  /diag, /diagnostics- Show detailed system, audio, and performance diagnostics\n"

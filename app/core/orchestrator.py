@@ -57,6 +57,32 @@ class Orchestrator:
         self._explicit_llm = llm_client is not None
         from app.ai.interpreter import ActionInterpreter
         self.interpreter = ActionInterpreter(settings=self.settings)
+        from app.core.proactive_agent import ProactiveAgent
+        self.proactive_agent = ProactiveAgent(settings=self.settings, orchestrator=self)
+
+    def is_voice_idle(self) -> bool:
+        """Returns True if the assistant is not actively speaking, recording, or processing."""
+        if getattr(self.state, "is_processing", False):
+            return False
+        if getattr(self.state, "pending_action", None) is not None:
+            return False
+        try:
+            if self.wake_word and hasattr(self.wake_word, "is_busy") and callable(self.wake_word.is_busy) and self.wake_word.is_busy():
+                return False
+        except Exception:
+            pass
+        try:
+            if self.tts and hasattr(self.tts, "is_speaking") and callable(self.tts.is_speaking) and self.tts.is_speaking():
+                return False
+        except Exception:
+            pass
+        return True
+
+    def check_proactive_initiative(self) -> Optional[Any]:
+        """Queries the proactive agent for any context-driven initiative."""
+        if hasattr(self, "proactive_agent") and self.proactive_agent:
+            return self.proactive_agent.check_context()
+        return None
 
     def get_stt(self) -> SpeechToText:
         """Returns the active Speech-to-Text instance (lazy-loaded)."""
@@ -69,6 +95,15 @@ class Orchestrator:
         if self.tts is None:
             self.tts = TextToSpeech(self.settings)
         return self.tts
+
+    def stop_speech(self) -> None:
+        """Immediately halts TTS audio playback and sets speech state to idle."""
+        try:
+            if self.settings.tts_enabled and self.tts is not None:
+                self.tts.stop()
+        except Exception as e:
+            logger.warning("Error stopping TTS speech: %s", e)
+
 
     def get_wake_word(self) -> Any:
         """Returns the active WakeWordDetector instance (lazy-loaded)."""

@@ -75,6 +75,37 @@ def test_chat_canvas(qapp):
     canvas.clear_chat()
     assert canvas.welcome_container is not None
 
+    # Test append_message alias
+    user_b = canvas.append_message("user", "Pesan dari user")
+    assert user_b.is_user is True
+    assert user_b.lbl_text.text() == "Pesan dari user"
+
+    asst_b = canvas.append_message("assistant", "Pesan dari assistant")
+    assert asst_b.is_user is False
+    assert asst_b.lbl_text.text() == "Pesan dari assistant"
+
+
+def test_main_window_proactive_triggered(qapp):
+    """Verifies that proactive agent suggestions render safely in chat canvas."""
+    orch = Orchestrator()
+    orch.state.is_muted = True
+    window = JarvisMainWindow(orchestrator=orch)
+
+    # Trigger proactive signal handler
+    window._on_proactive_triggered("Ada kendala layar, bos?", "Ada kendala layar, bos?")
+    qapp.processEvents()
+
+    # Verify bubble exists and text matches
+    last_item = window.chat_canvas.messages_layout.itemAt(
+        window.chat_canvas.messages_layout.count() - 1
+    )
+    assert last_item is not None
+    bubble = last_item.widget()
+    assert isinstance(bubble, MessageBubble)
+    assert "Ada kendala layar" in bubble.lbl_text.text()
+
+    window.close()
+
 
 def test_input_pill(qapp):
     """Verifies InputPill text submission, mic state toggling, and audio level."""

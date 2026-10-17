@@ -149,6 +149,13 @@ class ChatCanvas(QWidget):
         self.scroll_to_bottom()
         return bubble
 
+    def append_message(self, role_or_sender: str, text: str, **kwargs) -> MessageBubble:
+        """Generic append message supporting role ('user', 'assistant') or custom sender."""
+        if role_or_sender.lower() in ("user", "anda"):
+            return self.add_user_message(text)
+        sender = "JARVIS" if role_or_sender.lower() in ("assistant", "jarvis") else role_or_sender
+        return self.add_assistant_message(text, sender=sender)
+
     def clear_chat(self) -> None:
         """Clears all messages and restores the welcome state."""
         while self.messages_layout.count():

@@ -11,12 +11,13 @@ from app.core.router import RouteResult, RouteType
 logger = setup_logger("jarvis.handlers.confirmation")
 
 _AFFIRMATIVES = {
-    "ya", "yes", "y", "buka", "lanjut", "lanjutkan", "oke", "ok",
-    "sure", "proceed", "confirm", "silakan", "buka saja", "boleh"
+    "ya", "yes", "y", "iya", "yep", "yup", "yap", "iyo", "buka", "lanjut", "lanjutkan",
+    "oke", "ok", "sure", "proceed", "confirm", "silakan", "buka saja", "boleh",
+    "betul", "benar", "tentu", "yoi", "lakukan", "jalankan"
 }
 _NEGATIVES = {
     "tidak", "batal", "batalkan", "jangan", "no", "cancel",
-    "stop", "nevermind", "enggak", "gak", "nanti saja"
+    "stop", "nevermind", "enggak", "gak", "nggak", "engga", "ngga", "tidak usah", "nanti saja"
 }
 
 

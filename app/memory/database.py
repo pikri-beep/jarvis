@@ -62,6 +62,19 @@ class Database:
                         );
                         """
                     )
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS user_todos (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            title TEXT NOT NULL,
+                            due_date TEXT DEFAULT '',
+                            category TEXT DEFAULT 'general',
+                            is_completed INTEGER DEFAULT 0,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            completed_at TIMESTAMP
+                        );
+                        """
+                    )
 
                     # Dynamic column migration for existing user_memories tables
                     cursor = conn.execute("PRAGMA table_info(user_memories);")
@@ -70,6 +83,12 @@ class Database:
                         conn.execute("ALTER TABLE user_memories ADD COLUMN description TEXT DEFAULT '';")
                     if "applies_to" not in existing_cols:
                         conn.execute("ALTER TABLE user_memories ADD COLUMN applies_to TEXT DEFAULT 'general';")
+
+                    # Dynamic column migration for user_todos
+                    cursor = conn.execute("PRAGMA table_info(user_todos);")
+                    existing_todo_cols = {row["name"] for row in cursor.fetchall()}
+                    if "reminded" not in existing_todo_cols:
+                        conn.execute("ALTER TABLE user_todos ADD COLUMN reminded INTEGER DEFAULT 0;")
 
                 logger.debug("Initialized memory schema at %s", self.db_path)
             finally:
@@ -299,3 +318,148 @@ class Database:
         except Exception as e:
             logger.error("Error deleting learned alias %s: %s", clean_alias, e)
             return False
+
+    # --- User Todos & Notes Subsystem ---
+    def add_todo(self, title: str, due_date: str = "", category: str = "general") -> int:
+        """Inserts a new todo item and returns its ID."""
+        clean_title = title.strip()
+        if not clean_title:
+            return -1
+        try:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO user_todos (title, due_date, category, is_completed)
+                        VALUES (?, ?, ?, 0);
+                        """,
+                        (clean_title, due_date.strip(), category.strip()),
+                    )
+                    logger.info("Added todo: %r (id=%d)", clean_title, cursor.lastrowid)
+                    return cursor.lastrowid
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Error adding todo %r: %s", clean_title, e)
+            return -1
+
+    def get_todos(self, include_completed: bool = True) -> List[Dict[str, Any]]:
+        """Retrieves user todos, ordered by completion status and creation time."""
+        try:
+            conn = self._get_connection()
+            try:
+                if include_completed:
+                    cursor = conn.execute(
+                        "SELECT id, title, due_date, category, is_completed, created_at, completed_at FROM user_todos ORDER BY is_completed ASC, id DESC;"
+                    )
+                else:
+                    cursor = conn.execute(
+                        "SELECT id, title, due_date, category, is_completed, created_at, completed_at FROM user_todos WHERE is_completed = 0 ORDER BY id DESC;"
+                    )
+                return [dict(row) for row in cursor.fetchall()]
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Error retrieving todos: %s", e)
+            return []
+
+    def toggle_todo(self, todo_id: int) -> bool:
+        """Toggles the completion status of a todo item."""
+        try:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.execute("SELECT is_completed FROM user_todos WHERE id = ?;", (todo_id,))
+                    row = cursor.fetchone()
+                    if not row:
+                        return False
+                    new_status = 0 if row["is_completed"] else 1
+                    conn.execute(
+                        """
+                        UPDATE user_todos
+                        SET is_completed = ?, completed_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
+                        WHERE id = ?;
+                        """,
+                        (new_status, new_status, todo_id),
+                    )
+                    return True
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Error toggling todo %d: %s", todo_id, e)
+            return False
+
+    def delete_todo(self, todo_id: int) -> bool:
+        """Deletes a todo item by ID."""
+        try:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.execute("DELETE FROM user_todos WHERE id = ?;", (todo_id,))
+                    return cursor.rowcount > 0
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Error deleting todo %d: %s", todo_id, e)
+            return False
+
+    def clear_completed_todos(self) -> int:
+        """Deletes all completed todo items."""
+        try:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.execute("DELETE FROM user_todos WHERE is_completed = 1;")
+                    return cursor.rowcount
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Error clearing completed todos: %s", e)
+            return 0
+
+    def clear_all_todos(self) -> int:
+        """Deletes all todo items from the database and returns deleted count."""
+        try:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.execute("DELETE FROM user_todos;")
+                    deleted = cursor.rowcount
+                    logger.info("Cleared all %d todos from database", deleted)
+                    return deleted
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Error clearing all todos: %s", e)
+            return 0
+
+    def get_due_unreminded_todos(self) -> List[Dict[str, Any]]:
+        """Retrieves active todos that have a due date/time and have not yet been reminded."""
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.execute(
+                    "SELECT id, title, due_date, category, is_completed, created_at FROM user_todos WHERE is_completed = 0 AND reminded = 0 AND due_date != '' ORDER BY id ASC;"
+                )
+                return [dict(row) for row in cursor.fetchall()]
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Error retrieving due unreminded todos: %s", e)
+            return []
+
+    def mark_todo_reminded(self, todo_id: int) -> bool:
+        """Marks a todo item as reminded so it does not trigger repeated notifications."""
+        try:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute("UPDATE user_todos SET reminded = 1 WHERE id = ?;", (todo_id,))
+                    return True
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Error marking todo %d as reminded: %s", todo_id, e)
+            return False
+

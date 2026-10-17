@@ -1,9 +1,9 @@
 @echo off
-title JARVIS AI Assistant
 cd /d "%~dp0"
-if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" app\main.py
+if exist ".venv\Scripts\pythonw.exe" (
+    start "" ".venv\Scripts\pythonw.exe" run_gui.pyw
+) else if exist ".venv\Scripts\python.exe" (
+    start "" ".venv\Scripts\python.exe" run_gui.pyw
 ) else (
-    python app\main.py
+    start "" pythonw run_gui.pyw
 )
-if errorlevel 1 pause

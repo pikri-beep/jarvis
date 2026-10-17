@@ -222,14 +222,21 @@ def clean_text_for_speech(text: str, language: str = "auto") -> str:
     if not text or not text.strip():
         return ""
 
+    # Strip out trailing source citations section completely so TTS never reads it aloud
+    cleaned = re.split(r"(?:\r?\n)+(?:sumber(?:\s+terkait)?|sources?|rujukan)\s*:", text, flags=re.IGNORECASE)[0]
+    # Strip out trailing UI tips and instructions from speech
+    cleaned = re.split(r"(?:\r?\n)+\*?(?:tip|catatan\s+tambahan)\s*:", cleaned, flags=re.IGNORECASE)[0]
+
     # Remove emojis and miscellaneous non-text unicode symbols
-    cleaned = re.sub(r"[\U00010000-\U0010ffff]", "", text)
+    cleaned = re.sub(r"[\U00010000-\U0010ffff]", "", cleaned)
     cleaned = re.sub(r"[\u2600-\u27bf]", "", cleaned)
 
     # Remove markdown images ![alt](url)
     cleaned = re.sub(r"!\[[^\]]*\]\([^\)]+\)", " ", cleaned)
     # Filter out pure citation blocks or UI metadata lines so they are not spoken aloud
-    low_strip = text.strip().lower()
+    low_strip = cleaned.strip().lower()
+    if "cheatsheet" in low_strip or "quick cheatsheet" in low_strip or low_strip.startswith("commands available:"):
+        return ""
     if low_strip.startswith((
         "sumber:", "sumber :", "source:", "sources:",
         "[screen]", "* active window:", "* local vision model:", "* extracted content:"
@@ -373,7 +380,7 @@ class AudioPlaybackQueue:
                 if self._stop_event.is_set():
                     if current_stream is not None:
                         try:
-                            current_stream.abort()
+                            current_stream.stop()
                             current_stream.close()
                         except Exception:
                             pass
@@ -383,14 +390,17 @@ class AudioPlaybackQueue:
                     continue
 
                 audio_data, sample_rate = item
-                if audio_data is not None and len(audio_data) > 0:
+                if audio_data is not None and len(audio_data) > 0 and not self._stop_event.is_set():
                     self._is_playing.set()
                     try:
                         # Seamless continuous stream: avoid closing/re-opening device between chunks
                         if current_stream is None or current_sr != sample_rate:
                             if current_stream is not None:
-                                current_stream.stop()
-                                current_stream.close()
+                                try:
+                                    current_stream.stop()
+                                    current_stream.close()
+                                except Exception:
+                                    pass
                             current_stream = sd.OutputStream(
                                 samplerate=sample_rate,
                                 channels=1,
@@ -399,9 +409,26 @@ class AudioPlaybackQueue:
                             current_stream.start()
                             current_sr = sample_rate
 
-                        current_stream.write(audio_data)
+                        # Play in 512-sample slices (~32ms per slice) for near-instant, 100% thread-safe stopping
+                        chunk_size = 512
+                        for offset in range(0, len(audio_data), chunk_size):
+                            if self._stop_event.is_set():
+                                break
+                            chunk = audio_data[offset : offset + chunk_size]
+                            current_stream.write(chunk)
+
+                        if self._stop_event.is_set() and current_stream is not None:
+                            try:
+                                current_stream.stop()
+                                current_stream.close()
+                            except Exception:
+                                pass
+                            current_stream = None
+                            current_sr = None
+
                     except Exception as e:
-                        logger.error("Audio playback error: %s", e)
+                        if not self._stop_event.is_set():
+                            logger.error("Audio playback error: %s", e)
                         if current_stream is not None:
                             try:
                                 current_stream.close()
@@ -432,15 +459,16 @@ class AudioPlaybackQueue:
                 self._queue.task_done()
             except queue.Empty:
                 break
+
         self._is_playing.clear()
 
     def wait_until_done(self, timeout: Optional[float] = None) -> None:
         """Blocks until all queued audio has finished playing."""
         start = time.time()
-        while self.is_playing():
+        while self.is_playing() and not self._stop_event.is_set():
             if timeout and (time.time() - start) > timeout:
                 break
-            time.sleep(0.05)
+            time.sleep(0.02)
 
     def is_playing(self) -> bool:
         """Returns True if audio is actively playing or queued."""

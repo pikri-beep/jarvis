@@ -406,18 +406,38 @@ def handle_fast_command(
         elif route.action == "search_web":
             from app.tools.browser_agent import answer_search_query, open_search_in_browser
             query = route.args.get("query", "") or target
-            open_b = route.args.get("open_browser", False) or getattr(orchestrator.settings, "search_open_browser_tab", True)
-            if open_b and query:
+            # Always open Google in browser directly for web search queries
+            if query:
                 open_search_in_browser(query)
 
             ans = answer_search_query(query, language=effective_lang)
+            confirm_line = (
+                f"Membuka pencarian Google untuk '{query}' di browser, sir."
+                if is_id
+                else f"Opening Google search for '{query}' in your browser, sir."
+            )
+
+            # Build display answer: 1-line confirmation + clickable silent sources list
+            display_lines = [confirm_line]
+            if ans.sources:
+                display_lines.append("")
+                display_lines.append("Sumber Terkait:")
+                for idx, src in enumerate(ans.sources[:3], 1):
+                    domain_tag = f" ({src.domain})" if getattr(src, "domain", None) else ""
+                    title = getattr(src, "title", "Sumber")
+                    url = getattr(src, "url", "#") if not isinstance(src, dict) else src.get("url", "#")
+                    if not str(url).startswith(("http://", "https://")) and str(getattr(src, "snippet", "")).startswith(("http://", "https://")):
+                        url = getattr(src, "snippet", "#")
+                    display_lines.append(f"{idx}. [{title}]({url}){domain_tag}")
+
+            out = "\n".join(display_lines)
+
             orchestrator.state.set_last_search(
-                query=ans.query,
-                spoken_answer=ans.spoken_answer,
-                display_answer=ans.display_answer,
+                query=ans.query or query,
+                spoken_answer=confirm_line,
+                display_answer=out,
                 sources=ans.sources,
             )
-            out = ans.display_answer
             orchestrator.state.set_last_action("search_web", query, "Web Search", True)
             logger.info('[TOOL] name="search_web" query="%s" status="SUCCESS"', query)
             reply_chunks.append(out)
@@ -852,6 +872,130 @@ def handle_fast_command(
             reply_chunks.append(out)
             yield out
 
+        elif route.action == "clean_workspace":
+            from app.tools.janitor import clean_workspace
+            target = route.args.get("target", "downloads")
+            try:
+                res = clean_workspace(target, dry_run=False)
+                elapsed_ms = (time.time() - tool_start) * 1000.0
+                moved = res.get("moved_count", 0)
+                logger.info('[TOOL] name="clean_workspace" target="%s" moved=%d latency=%.1fms', target, moved, elapsed_ms)
+                out = (
+                    f"Saya telah merapikan folder {target.capitalize()}, sir. Sebanyak {moved} file berhasil dikelompokkan ke subfolder yang sesuai."
+                    if is_id
+                    else f"I have organized your {target.capitalize()} folder, sir. {moved} file(s) moved into clean subfolders."
+                )
+            except Exception as exc:
+                logger.exception('[TOOL] name="clean_workspace" target="%s" status="FAILURE" exception="%s"', target, exc)
+                out = f"Maaf sir, terjadi kendala saat merapikan folder {target}: {exc}" if is_id else f"Sorry sir, an error occurred while organizing {target}: {exc}"
+            reply_chunks.append(out)
+            yield out
+
+        elif route.action == "list_todos":
+            from app.core.todo_manager import TodoManager
+            try:
+                mgr = TodoManager(database=orchestrator.memory.db if hasattr(orchestrator, "memory") and hasattr(orchestrator.memory, "db") else None)
+                todos = mgr.list_tasks(include_completed=False)
+                elapsed_ms = (time.time() - tool_start) * 1000.0
+                logger.info('[TOOL] name="list_todos" count=%d latency=%.1fms', len(todos), elapsed_ms)
+                if not todos:
+                    out = (
+                        "Belum ada tugas aktif di daftar todo Anda, sir."
+                        if is_id
+                        else "You have no active tasks in your todo list, sir."
+                    )
+                else:
+                    lines = ["📋 **Daftar Tugas Aktif:**" if is_id else "📋 **Active Todo List:**"]
+                    for idx, t in enumerate(todos, start=1):
+                        title = t.get("title", "")
+                        due = t.get("due_date", "")
+                        due_str = f" *(Waktu: {due})*" if due else ""
+                        lines.append(f"{idx}. [ ] {title}{due_str}")
+                    lines.append("\n*Tip: Buka tab 📝 TODO & NOTES untuk melihat atau mencentang tugas.*" if is_id else "\n*Tip: Open the 📝 TODO & NOTES tab to view or check off tasks.*")
+                    out = "\n".join(lines)
+            except Exception as exc:
+                logger.exception('[TOOL] name="list_todos" status="FAILURE" exception="%s"', exc)
+                out = f"Maaf sir, gagal mengambil daftar tugas: {exc}" if is_id else f"Sorry sir, could not retrieve tasks: {exc}"
+            reply_chunks.append(out)
+            yield out
+
+        elif route.action == "complete_todo":
+            from app.core.todo_manager import TodoManager
+            task_num = route.args.get("task_number")
+            try:
+                mgr = TodoManager(database=orchestrator.memory.db if hasattr(orchestrator, "memory") and hasattr(orchestrator.memory, "db") else None)
+                todos = mgr.list_tasks(include_completed=False)
+                if task_num and 1 <= task_num <= len(todos):
+                    target_todo = todos[task_num - 1]
+                    mgr.toggle_task(target_todo["id"])
+                    out = (
+                        f"Tugas #{task_num} ('{target_todo['title']}') telah ditandai selesai, sir."
+                        if is_id
+                        else f"Task #{task_num} ('{target_todo['title']}') has been marked completed, sir."
+                    )
+                else:
+                    out = (
+                        f"Tugas nomor {task_num} tidak ditemukan di daftar aktif, sir."
+                        if is_id
+                        else f"Task number {task_num} not found in active list, sir."
+                    )
+            except Exception as exc:
+                logger.exception('[TOOL] name="complete_todo" status="FAILURE" exception="%s"', exc)
+                out = f"Maaf sir, gagal menyelesaikan tugas: {exc}" if is_id else f"Sorry sir, could not complete task: {exc}"
+            reply_chunks.append(out)
+            yield out
+
+        elif route.action == "clear_completed_todos":
+            from app.core.todo_manager import TodoManager
+            try:
+                mgr = TodoManager(database=orchestrator.memory.db if hasattr(orchestrator, "memory") and hasattr(orchestrator.memory, "db") else None)
+                cleared_count = mgr.clear_completed()
+                out = (
+                    f"Sebanyak {cleared_count} tugas selesai telah dibersihkan dari daftar, sir."
+                    if is_id
+                    else f"{cleared_count} completed task(s) cleared from todo list, sir."
+                )
+            except Exception as exc:
+                logger.exception('[TOOL] name="clear_completed_todos" status="FAILURE" exception="%s"', exc)
+                out = f"Maaf sir, gagal membersihkan tugas: {exc}" if is_id else f"Sorry sir, could not clear tasks: {exc}"
+            reply_chunks.append(out)
+            yield out
+
+        elif route.action == "clear_all_todos":
+            from app.core.todo_manager import TodoManager
+            try:
+                mgr = TodoManager(database=orchestrator.memory.db if hasattr(orchestrator, "memory") and hasattr(orchestrator.memory, "db") else None)
+                cleared_count = mgr.clear_all()
+                out = (
+                    f"Semua {cleared_count} tugas dalam daftar todo Anda telah berhasil dihapus, sir."
+                    if is_id
+                    else f"All {cleared_count} tasks in your todo list have been cleared, sir."
+                )
+            except Exception as exc:
+                logger.exception('[TOOL] name="clear_all_todos" status="FAILURE" exception="%s"', exc)
+                out = f"Maaf sir, gagal menghapus semua tugas: {exc}" if is_id else f"Sorry sir, could not clear all tasks: {exc}"
+            reply_chunks.append(out)
+            yield out
+
+        elif route.action == "add_todo":
+            from app.core.todo_manager import TodoManager
+            task_text = route.args.get("task", "")
+            try:
+                mgr = TodoManager(database=orchestrator.memory.db if hasattr(orchestrator, "memory") and hasattr(orchestrator.memory, "db") else None)
+                ok, msg, todo_id = mgr.add_task(task_text)
+                elapsed_ms = (time.time() - tool_start) * 1000.0
+                logger.info('[TOOL] name="add_todo" task="%s" id=%d latency=%.1fms', task_text, todo_id, elapsed_ms)
+                out = (
+                    f"Siap sir, {msg.lower()}."
+                    if is_id
+                    else f"Noted, sir. {msg}."
+                )
+            except Exception as exc:
+                logger.exception('[TOOL] name="add_todo" status="FAILURE" exception="%s"', exc)
+                out = f"Maaf sir, gagal mencatat tugas: {exc}" if is_id else f"Sorry sir, could not save task: {exc}"
+            reply_chunks.append(out)
+            yield out
+
         elif route.action == "unsupported_command":
             out = (
                 "Perintah tidak dikenali, sir. Sebutkan tindakan seperti buka aplikasi, kontrol browser, ketik teks, atau baca layar."
@@ -946,12 +1090,36 @@ def handle_web_search(
             yield out
             return
 
-        # Zero-LLM extractive factual search pipeline
+        # Open Google in browser directly for explicit search queries
+        if query:
+            open_search_in_browser(query)
+
+        # Zero-LLM extractive factual search pipeline for sources
         ans = answer_search_query(query, language=effective_lang)
+        confirm_line = (
+            f"Membuka pencarian Google untuk '{query}' di browser, sir."
+            if is_id
+            else f"Opening Google search for '{query}' in your browser, sir."
+        )
+
+        display_lines = [confirm_line]
+        if ans.sources:
+            display_lines.append("")
+            display_lines.append("Sumber Terkait:")
+            for idx, src in enumerate(ans.sources[:3], 1):
+                domain_tag = f" ({src.domain})" if getattr(src, "domain", None) else ""
+                title = getattr(src, "title", "Sumber")
+                url = getattr(src, "url", "#") if not isinstance(src, dict) else src.get("url", "#")
+                if not str(url).startswith(("http://", "https://")) and str(getattr(src, "snippet", "")).startswith(("http://", "https://")):
+                    url = getattr(src, "snippet", "#")
+                display_lines.append(f"{idx}. [{title}]({url}){domain_tag}")
+
+        out = "\n".join(display_lines)
+
         orchestrator.state.set_last_search(
-            query=ans.query,
-            spoken_answer=ans.spoken_answer,
-            display_answer=ans.display_answer,
+            query=ans.query or query,
+            spoken_answer=confirm_line,
+            display_answer=out,
             sources=ans.sources,
         )
         orchestrator.state.set_last_action("search_web", query, "Search-First", bool(ans.sources))
@@ -962,7 +1130,6 @@ def handle_web_search(
             ans.latency_ms,
             "SUCCESS" if ans.sources else "FAILURE",
         )
-        out = ans.display_answer
         orchestrator.state.add_turn(user_input, out)
         yield out
 

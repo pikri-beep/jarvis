@@ -2,6 +2,8 @@
 
 JARVIS is a local, private, voice-enabled AI personal assistant for Windows 11 built to run primarily offline and without paid APIs, following the principles and roadmap detailed in [AGENTS.md](AGENTS.md).
 
+> 💡 **Panduan Pemula (How-To-Use)**: Baca panduan lengkap penggunaan, tutorial langkah demi langkah, dan katalog kemampuan JARVIS untuk pemula di [how-to-use.md](how-to-use.md).
+
 ---
 
 ## Current Status: Phase 4 (Always-Listening Local Wake Word) Complete

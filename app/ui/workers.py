@@ -8,6 +8,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from app.core.logger import setup_logger
 from app.core.orchestrator import Orchestrator
+from app.core.router import RouteType
 from app.voice.audio_recorder import PushToTalkRecorder
 
 logger = setup_logger("jarvis.ui.workers")
@@ -30,6 +31,10 @@ class ProcessInputWorker(QThread):
 
     def cancel(self) -> None:
         self._is_cancelled = True
+        try:
+            self.orchestrator.stop_speech()
+        except Exception:
+            pass
 
     def run(self) -> None:
         t_start = time.time()
@@ -58,9 +63,14 @@ class ProcessInputWorker(QThread):
             else:
                 route_name = "DIRECT"
 
-            # Trigger spoken TTS playback in background if enabled and not muted
+            # Trigger spoken TTS playback in background if enabled and not muted or silent
             is_muted = getattr(self.orchestrator.state, "is_muted", False)
-            if self.orchestrator.settings.tts_enabled and full_response and not is_muted:
+            is_silent_route = (
+                getattr(route, "route_type", None) == RouteType.TERMINAL_COMMAND
+                or getattr(route, "action", "") in ("cheatsheet", "cheat", "help", "show_diagnostics", "list_devices", "clear")
+                or getattr(route, "args", {}).get("silent", False)
+            )
+            if not self._is_cancelled and not is_silent_route and self.orchestrator.settings.tts_enabled and full_response and not is_muted:
                 try:
                     self.speaking_started.emit()
                     tts = self.orchestrator.get_tts()
@@ -75,7 +85,8 @@ class ProcessInputWorker(QThread):
                 finally:
                     self.speaking_finished.emit()
 
-            self.turn_completed.emit(route_name, full_response, latency)
+            if not self._is_cancelled:
+                self.turn_completed.emit(route_name, full_response, latency)
 
         except Exception as e:
             logger.error("Error processing input in worker: %s", e, exc_info=True)
@@ -168,6 +179,53 @@ class SystemMetricsWorker(QThread):
 
             # Sleep 2 seconds before next poll
             for _ in range(20):
+                if not self._running:
+                    break
+                time.sleep(0.1)
+
+
+class ProactiveWorker(QThread):
+    """Background worker periodically querying ProactiveAgent for context-driven initiatives."""
+
+    proactive_triggered = pyqtSignal(str, str)  # display_message, spoken_message
+    speaking_started = pyqtSignal()
+    speaking_finished = pyqtSignal()
+
+    def __init__(self, orchestrator: Orchestrator, parent: Optional[QObject] = None):
+        super().__init__(parent)
+        self.orchestrator = orchestrator
+        self._running = True
+
+    def stop(self) -> None:
+        self._running = False
+
+    def run(self) -> None:
+        # Initial brief delay before first check
+        time.sleep(2.0)
+        while self._running:
+            try:
+                if self.orchestrator.is_voice_idle():
+                    event = self.orchestrator.check_proactive_initiative()
+                    if event:
+                        self.proactive_triggered.emit(event.display_message, event.spoken_message)
+
+                        # Trigger spoken TTS if enabled and not muted
+                        is_muted = getattr(self.orchestrator.state, "is_muted", False)
+                        if self.orchestrator.settings.tts_enabled and event.spoken_message and not is_muted:
+                            try:
+                                self.speaking_started.emit()
+                                tts = self.orchestrator.get_tts()
+                                lang = getattr(self.orchestrator.state, "conversation_language", "id")
+                                tts.speak(event.spoken_message, blocking=True, language=lang)
+                            except Exception as tts_err:
+                                logger.warning("Proactive TTS speech warning: %s", tts_err)
+                            finally:
+                                self.speaking_finished.emit()
+            except Exception as e:
+                logger.debug("Proactive worker check warning: %s", e)
+
+            # Sleep 5 seconds in increments to allow fast stop
+            for _ in range(50):
                 if not self._running:
                     break
                 time.sleep(0.1)

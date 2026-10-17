@@ -43,10 +43,22 @@ ALLOWLISTED_ACTIONS: Dict[str, List[str]] = {
     "screen_read": ["inspect_screen", "ask_element", "read_error"],
     "system": ["time", "date", "battery", "lock", "screenshot", "system_info"],
     "task": ["execute_task", "continue", "retry", "vision_task", "set_timer"],
+    "todo": ["add", "list", "delete", "clear_all", "clear_completed", "toggle", "complete", "add_task", "delete_all", "clear"],
+    "filesystem": ["read", "write", "delete", "create_folder", "open_folder", "list_files", "clean_workspace"],
+    "code_execution": ["python", "powershell", "execute_python_code", "execute_powershell", "run_script"],
 }
 
 # Synonyms mapped to canonical actions
 ACTION_SYNONYMS: Dict[str, str] = {
+    "clear_all_todos": "clear_all",
+    "delete_all_todos": "clear_all",
+    "delete_all": "clear_all",
+    "clear_todos": "clear_completed",
+    "remove_todo": "delete",
+    "add_todo": "add",
+    "list_todos": "list",
+    "run_python": "python",
+    "run_powershell": "powershell",
     "set_timer": "vision_task",
     "search_web": "search",
     "web_search": "search",
@@ -104,7 +116,7 @@ def build_interpreter_system_prompt(language: str = "id") -> str:
         "JSON SCHEMA:\n"
         "{\n"
         '  "type": "action" | "conversation" | "clarify",\n'
-        '  "intent": "media_control" | "web_search" | "web_browser" | "browser" | "page_reader" | "open_application" | "open_website" | "desktop_control" | "screen_read" | "system",\n'
+        '  "intent": "todo" | "media_control" | "web_search" | "web_browser" | "browser" | "page_reader" | "open_application" | "open_website" | "desktop_control" | "screen_read" | "system" | "filesystem" | "code_execution",\n'
         '  "action": "<allowlisted_action>",\n'
         '  "target": "<target_app_or_entity>",\n'
         '  "parameters": { ... },\n'
@@ -112,12 +124,14 @@ def build_interpreter_system_prompt(language: str = "id") -> str:
         '  "response": "<concise answer if type is conversation or clarify>"\n'
         "}\n\n"
         "RULES:\n"
-        "1. If user wants to do something (open app, search web, control music, click, read page, search Google, navigate tab), type MUST be 'action'.\n"
-        "2. Resolve pronouns ('it', 'that song', 'the article', 'the first result', 'hasil kedua') using provided context.\n"
-        "3. If user is asking a purely conversational or general knowledge question, type MUST be 'conversation'.\n"
-        "4. If actionable request is completely ambiguous, type MUST be 'clarify'.\n"
-        "5. Output compact JSON only.\n"
-        '6. If type is \'action\', response MUST be empty string "". Do not include explanations in response for actions.'
+        "1. If user wants to do something (open app, search web, control music, click, read page, add/list/delete/clear todos, create/delete files or folders, run code/script), type MUST be 'action'. Never classify an imperative action command as 'conversation'.\n"
+        "2. For opening search results/sources (e.g. 'sumber 1', 'tolong ke sumber pertama', 'open first source'), set intent='web_search', action='open_source', target='1' (or the requested index number).\n"
+        "3. For todo management (e.g. 'hapus semua todo', 'clear todo', 'daftar tugas', 'catat todo: ...'), set intent='todo', action='clear_all' (or 'add', 'list', 'delete', 'clear_completed').\n"
+        "4. Resolve pronouns and references ('it', 'that song', 'the article', 'the first result', 'sumber pertama') using provided context.\n"
+        "5. If user is asking a conversational or general knowledge question, type MUST be 'conversation'.\n"
+        "6. CRITICAL PERSONA CONSTRAINT: NEVER output third-person meta-analysis (e.g. NEVER output 'The user is looking for...', 'The user wants...'). If type is 'conversation' or 'clarify', 'response' MUST be what JARVIS directly speaks to the user in Bahasa Indonesia, addressing the user as 'sir'.\n"
+        "7. If type is 'action', response MUST be empty string \"\". Do not output promises or conversational text for actions.\n"
+        "8. Output compact JSON only."
     )
 
 

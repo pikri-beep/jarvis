@@ -147,7 +147,7 @@ def test_search_intent_without_llm_invocation(mock_orchestrator):
         assert mock_orchestrator.llm.chat_stream.call_count == 0
         
         reply = "".join(tokens)
-        assert "Perkembangan AI terbaru" in reply
+        assert "perkembangan ai terbaru" in reply.lower()
         assert "https://technews.example/ai" in reply
 
 

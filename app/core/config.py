@@ -195,6 +195,17 @@ class Settings:
         default_factory=lambda: _get_bool("JARVIS_MEMORY_ENABLED", False)
     )
 
+    # Proactive Autonomous Agent Settings
+    proactive_enabled: bool = field(
+        default_factory=lambda: _get_bool("JARVIS_PROACTIVE_ENABLED", True)
+    )
+    proactive_interval_seconds: float = field(
+        default_factory=lambda: _get_float("JARVIS_PROACTIVE_INTERVAL_SECONDS", 900.0)
+    )
+    proactive_cooldown_seconds: float = field(
+        default_factory=lambda: _get_float("JARVIS_PROACTIVE_COOLDOWN_SECONDS", 60.0)
+    )
+
     # Simulated User Agent (Voice E2E Testing)
     groq_api_key: Optional[str] = field(
         default_factory=lambda: os.getenv("GROQ_API_KEY")

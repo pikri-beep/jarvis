@@ -858,5 +858,20 @@
     "text": "googling resep maknan",
     "intent": "search_web",
     "target": "resep maknan"
+  },
+  {
+    "text": "up volume 4%",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "up volume to 100%.",
+    "intent": "volume_up",
+    "target": ""
+  },
+  {
+    "text": "naikkan volume sampai 100%",
+    "intent": "volume_up",
+    "target": ""
   }
 ]
