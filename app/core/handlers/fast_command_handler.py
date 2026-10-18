@@ -561,12 +561,37 @@ def handle_fast_command(
             reply_chunks.append(msg)
             yield msg
 
+        elif route.action == "learn_memory":
+            from app.memory.memory import memory_manager
+            text_to_learn = route.args.get("text", "") or user_input
+            res = memory_manager.learn_from_text(text_to_learn, auto_confirm=True, language=effective_lang)
+            msg = res.summary_message or (
+                "Informasi berhasil dipelajari dan disimpan ke memori, sir."
+                if is_id else
+                "Information learned and saved to memory, sir."
+            )
+            orchestrator.state.set_last_action("learn_memory", "memory", "Memory", True)
+            logger.info('[TOOL] name="learn_memory" status="SUCCESS"')
+            reply_chunks.append(msg)
+            yield msg
+
         elif route.action == "store_memory":
-            from app.memory.memory import save_user_memory
-            key = route.args.get("key", "catatan")
-            val = route.args.get("value", "")
-            success, msg = save_user_memory(key=key, value=val, user_input=user_input, language=effective_lang)
-            orchestrator.state.set_last_action("store_memory", key, "Memory", success)
+            from app.memory.memory import save_user_memory, memory_manager
+            key = route.args.get("key", "").strip()
+            val = route.args.get("value", "").strip()
+            raw = route.args.get("raw", user_input)
+
+            if (not key or key in ("catatan", "fakta", "")) and raw:
+                res = memory_manager.learn_from_text(raw, auto_confirm=True, language=effective_lang)
+                if res.learned:
+                    success = True
+                    msg = res.summary_message
+                else:
+                    success, msg = save_user_memory(key=key or "catatan", value=val or raw, user_input=user_input, language=effective_lang)
+            else:
+                success, msg = save_user_memory(key=key, value=val, user_input=user_input, language=effective_lang)
+
+            orchestrator.state.set_last_action("store_memory", key or "memory", "Memory", success)
             logger.info('[TOOL] name="store_memory" key="%s" status="%s"', key, "SUCCESS" if success else "FAILURE")
             reply_chunks.append(msg)
             yield msg

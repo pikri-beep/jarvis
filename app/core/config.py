@@ -207,7 +207,7 @@ class Settings:
         default_factory=lambda: _get_bool("JARVIS_WEB_SEARCH_ENABLED", False)
     )
     memory_enabled: bool = field(
-        default_factory=lambda: _get_bool("JARVIS_MEMORY_ENABLED", False)
+        default_factory=lambda: _get_bool("JARVIS_MEMORY_ENABLED", True)
     )
 
     # Proactive Autonomous Agent Settings

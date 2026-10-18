@@ -36,6 +36,8 @@ def _stream_conversational_response(
         sources = state_ctx.get("last_search_sources", [])
         src_summary = ", ".join([f"{idx+1}. {getattr(s, 'title', s.get('title', '')) if isinstance(s, dict) else getattr(s, 'title', '')}" for idx, s in enumerate(sources[:3])]) if sources else "Tidak ada"
         sys_prompt += f"\n\nContextual Desktop Info:\n- Recent Search Query: '{q}'\n- Available Search Sources: {src_summary}"
+    if state_ctx and state_ctx.get("stored_memories"):
+        sys_prompt += f"\n- Stored User Facts: {state_ctx['stored_memories']}"
 
     messages = orchestrator.state.get_messages_for_llm()
     # Ensure system prompt is present at messages[0]
@@ -158,6 +160,16 @@ def handle_ai_request(
             recent_msgs = [f"{m.role}: '{m.content[:100]}'" for m in orchestrator.state.history[-2:]]
             recent_dlg = " | ".join(recent_msgs)
 
+        # Provide memory context to ActionInterpreter
+        stored_mems_summary = ""
+        try:
+            if hasattr(orchestrator, "memory") and orchestrator.memory:
+                all_m = orchestrator.memory.recall_all()
+                if all_m:
+                    stored_mems_summary = ", ".join([f"{k}: {v}" for k, v in list(all_m.items())[:12]])
+        except Exception:
+            pass
+
         state_ctx = {
             "recent_dialog": recent_dlg,
             "active_media": orchestrator.state.get_last_action_target() if ("music" in (orchestrator.state.get_last_action_target() or "") or "youtube" in (orchestrator.state.get_last_action_target() or "").lower()) else "",
@@ -166,6 +178,7 @@ def handle_ai_request(
             "last_focused_element": getattr(orchestrator.state.get_last_focused_element(), "name", ""),
             "last_search_query": orchestrator.state.get_last_search().get("query", ""),
             "last_search_sources": orchestrator.state.get_last_search().get("sources", []),
+            "stored_memories": stored_mems_summary,
             "active_window": orchestrator.state.get_last_screen().get("window_title", ""),
         }
 
@@ -314,6 +327,31 @@ def handle_ai_request(
                 from app.tools.screen_reader import read_screen_content
                 res = read_screen_content(prompt=user_input, language=effective_lang)
                 out = f"{res.spoken_summary}\n\n{res.display_text}"
+
+            # Persistent Memory Management
+            elif plan.intent == "memory":
+                from app.memory.memory import memory_manager, recall_user_memories, forget_user_memory
+                if plan.action in ("store", "save", "add", "store_memory"):
+                    k = plan.parameters.get("key") or plan.target
+                    v = plan.parameters.get("value")
+                    if k and v:
+                        _, out = memory_manager.store_fact(key=str(k), value=str(v))
+                    else:
+                        res = memory_manager.learn_from_text(user_input, auto_confirm=True, language=effective_lang)
+                        out = res.summary_message
+                elif plan.action in ("recall", "get", "recall_memory"):
+                    q_rec = plan.parameters.get("key") or plan.target or ""
+                    out = recall_user_memories(query=q_rec, language=effective_lang)
+                elif plan.action in ("list", "all", "recall_all", "recall_all_memories", "show_profile", "profile"):
+                    out = memory_manager.format_profile_card(language=effective_lang)
+                elif plan.action in ("forget", "delete", "remove", "forget_memory"):
+                    k_del = plan.parameters.get("key") or plan.target or ""
+                    _, out = forget_user_memory(key=k_del, language=effective_lang)
+                elif plan.action in ("learn", "learn_memory"):
+                    res = memory_manager.learn_from_text(user_input, auto_confirm=True, language=effective_lang)
+                    out = res.summary_message
+                else:
+                    out = "Operasi memori telah diproses, sir." if is_id else "Memory operation processed, sir."
 
             # Fallback registered tool execution
             else:

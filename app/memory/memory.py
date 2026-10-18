@@ -53,20 +53,99 @@ class MemoryManager:
         return False, f"Maaf {honorific}, gagal menyimpan informasi ke memori."
 
     def recall_fact(self, key: str) -> Optional[str]:
-        """Recalls a single fact by key."""
-        return self.db.get_memory(key)
+        """Recalls a single fact by key with alias resolution and fuzzy matching."""
+        val = self.db.get_memory(key)
+        if val:
+            return val
+
+        # Common aliases & synonym mapping
+        aliases = {
+            "nama": ["user_name", "nama_pengguna", "name"],
+            "user_name": ["nama", "nama_pengguna", "name"],
+            "name": ["user_name", "nama"],
+            "honorific": ["panggilan", "title"],
+            "panggilan": ["honorific"],
+            "makanan": ["makanan_favorit", "favorite_food", "food"],
+            "makanan_favorit": ["makanan", "favorite_food", "food"],
+            "minuman": ["minuman_favorit", "favorite_drink", "drink"],
+            "browser": ["preferred_browser"],
+            "peramban": ["preferred_browser"],
+            "editor": ["preferred_code_editor"],
+            "lokasi": ["location", "tempat_tinggal", "kota", "city"],
+            "location": ["lokasi", "tempat_tinggal", "kota"],
+            "tempat_tinggal": ["location", "lokasi", "kota"],
+            "subject": ["favorite_subject", "subjek_favorit"],
+            "favorite_subject": ["subject", "subjek_favorit"],
+        }
+        for alt_key in aliases.get(key.lower(), []):
+            alt_val = self.db.get_memory(alt_key)
+            if alt_val:
+                return alt_val
+
+        # Substring fuzzy search across all memories
+        all_mems = self.db.get_all_memories()
+        clean_k = key.lower().replace("saya", "").replace("ku", "").replace("favorit", "").strip()
+        if clean_k:
+            for k, v in all_mems.items():
+                if clean_k in k.lower() or k.lower() in clean_k:
+                    return v
+
+        return None
 
     def recall_all(self) -> Dict[str, str]:
         """Recalls all saved facts."""
         return self.db.get_all_memories()
 
     def forget_fact(self, key: str) -> Tuple[bool, str]:
-        """Removes a stored fact."""
+        """Removes a stored fact with alias resolution and fuzzy key matching."""
         honorific = self.get_honorific()
-        success = self.db.delete_memory(key)
-        if success:
+        clean_k = key.strip().lower()
+        if not clean_k:
+            return False, f"Key memori tidak boleh kosong, {honorific}."
+
+        # 1. Direct match
+        if self.db.delete_memory(key):
             return True, f"Informasi tentang '{key}' telah dihapus dari memori, {honorific}."
+
+        # 2. Normalized without possessive particles ('saya', 'ku', 'aku', 'my')
+        stripped_k = re.sub(r"\b(?:saya|ku|aku|my)\b", "", clean_k).strip().replace(" ", "_")
+        if stripped_k and self.db.delete_memory(stripped_k):
+            return True, f"Informasi tentang '{key}' telah dihapus dari memori, {honorific}."
+
+        # 3. Aliases mapping
+        aliases = {
+            "nama": ["user_name", "nama_pengguna", "name"],
+            "user_name": ["nama", "nama_pengguna", "name"],
+            "name": ["user_name", "nama"],
+            "honorific": ["panggilan", "title"],
+            "panggilan": ["honorific"],
+            "makanan": ["makanan_favorit", "makanan_kesukaan", "favorite_food", "food"],
+            "makanan_favorit": ["makanan", "makanan_kesukaan", "favorite_food", "food"],
+            "makanan_kesukaan": ["makanan", "makanan_favorit", "favorite_food", "food"],
+            "minuman": ["minuman_favorit", "minuman_kesukaan", "favorite_drink", "drink"],
+            "minuman_favorit": ["minuman", "minuman_kesukaan", "favorite_drink", "drink"],
+            "browser": ["preferred_browser"],
+            "peramban": ["preferred_browser"],
+            "editor": ["preferred_code_editor"],
+            "lokasi": ["location", "tempat_tinggal", "kota", "city"],
+            "location": ["lokasi", "tempat_tinggal", "kota"],
+        }
+        candidates = aliases.get(stripped_k, []) + aliases.get(clean_k, [])
+        for alt in candidates:
+            if self.db.delete_memory(alt):
+                return True, f"Informasi tentang '{key}' telah dihapus dari memori, {honorific}."
+
+        # 4. Fuzzy substring match across stored keys
+        all_mems = self.db.get_all_memories()
+        lookup_target = (stripped_k or clean_k).replace("_", " ")
+        for k in list(all_mems.keys()):
+            k_clean = k.lower().replace("_", " ")
+            if lookup_target in k_clean or k_clean in lookup_target:
+                if self.db.delete_memory(k):
+                    return True, f"Informasi tentang '{k}' telah dihapus dari memori, {honorific}."
+
         return False, f"Saya tidak menemukan catatan tentang '{key}' di memori, {honorific}."
+
 
     def clear_all(self) -> Tuple[bool, str]:
         """Clears all stored memories."""
@@ -193,12 +272,12 @@ class MemoryManager:
         ]
 
         cat_titles = {
-            "identity": "👤 Identitas & Panggilan" if is_id else "👤 Identity & Honorific",
-            "preference": "🛠️ Preferensi Aplikasi & Tool" if is_id else "🛠️ Tool & App Preferences",
-            "habit": "⏰ Kebiasaan & Rutinitas" if is_id else "⏰ Habits & Routines",
-            "rule": "📜 Aturan & Instruksi Perilaku" if is_id else "📜 Rules & Custom Instructions",
-            "project": "📂 Proyek & Direktori Kerja" if is_id else "📂 Projects & Workspaces",
-            "general": "📌 Catatan Lainnya" if is_id else "📌 Other Facts",
+            "identity": "[Identitas & Panggilan]" if is_id else "[Identity & Honorific]",
+            "preference": "[Preferensi Aplikasi & Tool]" if is_id else "[Tool & App Preferences]",
+            "habit": "[Kebiasaan & Rutinitas]" if is_id else "[Habits & Routines]",
+            "rule": "[Aturan & Instruksi Perilaku]" if is_id else "[Rules & Custom Instructions]",
+            "project": "[Proyek & Direktori Kerja]" if is_id else "[Projects & Workspaces]",
+            "general": "[Catatan Lainnya]" if is_id else "[Other Facts]",
         }
 
         for cat_key, title in cat_titles.items():
@@ -207,7 +286,7 @@ class MemoryManager:
                 lines.append(f"\n{title}:")
                 for it in items:
                     desc = it.get("description") or it.get("key")
-                    lines.append(f"  • {desc}: {it.get('value')}")
+                    lines.append(f"  - {desc}: {it.get('value')}")
 
         return "\n".join(lines)
 
@@ -253,7 +332,13 @@ def recall_user_memories(query: str = "", language: str = "id") -> str:
     if query:
         val = memory_manager.recall_fact(query)
         if val:
-            return f"{query} Anda adalah {val}, {honorific}." if is_id else f"Your {query} is {val}, {honorific}."
+            label = "Nama" if query.lower() in ("user_name", "nama", "name") else query.replace("_", " ").title()
+            return f"{label} Anda adalah {val}, {honorific}." if is_id else f"Your {label} is {val}, {honorific}."
+        return (
+            f"Saya belum memiliki catatan tentang '{query}' di memori, {honorific}."
+            if is_id else
+            f"I don't have a record for '{query}' in memory yet, {honorific}."
+        )
     return memory_manager.format_profile_card(language=language)
 
 
@@ -261,16 +346,12 @@ def forget_user_memory(key: str, language: str = "id") -> Tuple[bool, str]:
     """Removes a stored fact."""
     is_id = language.lower().startswith("id")
     honorific = memory_manager.get_honorific()
-    if key.lower() in ("all", "semua", "semuanya"):
+    if key.lower() in ("all", "semua", "semuanya", "semua ingatan", "semua memori"):
         success = memory_manager.db.clear_all_memories()
         msg = f"Seluruh catatan memori telah dibersihkan, {honorific}." if is_id else f"All stored memories cleared, {honorific}."
         return success, msg
-    success = memory_manager.db.delete_memory(key)
-    if success:
-        msg = f"Informasi tentang '{key}' telah dihapus dari memori, {honorific}." if is_id else f"Information regarding '{key}' removed from memory, {honorific}."
-    else:
-        msg = f"Saya tidak menemukan catatan tentang '{key}', {honorific}." if is_id else f"No record found for '{key}', {honorific}."
-    return success, msg
+    return memory_manager.forget_fact(key)
+
 
 
 def get_relevant_memories_prompt(language: str = "id") -> str:

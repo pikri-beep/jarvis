@@ -44,6 +44,7 @@ ALLOWLISTED_ACTIONS: Dict[str, List[str]] = {
     "system": ["time", "date", "battery", "lock", "screenshot", "system_info"],
     "task": ["execute_task", "continue", "retry", "vision_task", "set_timer"],
     "todo": ["add", "list", "delete", "clear_all", "clear_completed", "toggle", "complete", "add_task", "delete_all", "clear"],
+    "memory": ["store", "recall", "forget", "list", "learn", "show_profile"],
     "filesystem": ["read", "write", "delete", "create_folder", "open_folder", "list_files", "clean_workspace"],
     "code_execution": ["python", "powershell", "execute_python_code", "execute_powershell", "run_script"],
 }
@@ -57,6 +58,12 @@ ACTION_SYNONYMS: Dict[str, str] = {
     "remove_todo": "delete",
     "add_todo": "add",
     "list_todos": "list",
+    "remember": "store",
+    "save_memory": "store",
+    "ingat": "store",
+    "lupakan": "forget",
+    "recall_memory": "recall",
+    "list_memories": "list",
     "run_python": "python",
     "run_powershell": "powershell",
     "set_timer": "vision_task",
@@ -116,7 +123,7 @@ def build_interpreter_system_prompt(language: str = "id") -> str:
         "JSON SCHEMA:\n"
         "{\n"
         '  "type": "action" | "conversation" | "clarify",\n'
-        '  "intent": "todo" | "media_control" | "web_search" | "web_browser" | "browser" | "page_reader" | "open_application" | "open_website" | "desktop_control" | "screen_read" | "system" | "filesystem" | "code_execution",\n'
+        '  "intent": "memory" | "todo" | "media_control" | "web_search" | "web_browser" | "browser" | "page_reader" | "open_application" | "open_website" | "desktop_control" | "screen_read" | "system" | "filesystem" | "code_execution",\n'
         '  "action": "<allowlisted_action>",\n'
         '  "target": "<target_app_or_entity>",\n'
         '  "parameters": { ... },\n'
@@ -124,14 +131,15 @@ def build_interpreter_system_prompt(language: str = "id") -> str:
         '  "response": "<concise answer if type is conversation or clarify>"\n'
         "}\n\n"
         "RULES:\n"
-        "1. If user wants to do something (open app, search web, control music, click, read page, add/list/delete/clear todos, create/delete files or folders, run code/script), type MUST be 'action'. Never classify an imperative action command as 'conversation'.\n"
+        "1. If user wants to do something (open app, search web, control music, click, read page, add/list/delete/clear todos, store/recall/forget memory, create/delete files or folders, run code/script), type MUST be 'action'. Never classify an imperative action command as 'conversation'.\n"
         "2. For opening search results/sources (e.g. 'sumber 1', 'tolong ke sumber pertama', 'open first source'), set intent='web_search', action='open_source', target='1' (or the requested index number).\n"
         "3. For todo management (e.g. 'hapus semua todo', 'clear todo', 'daftar tugas', 'catat todo: ...'), set intent='todo', action='clear_all' (or 'add', 'list', 'delete', 'clear_completed').\n"
-        "4. Resolve pronouns and references ('it', 'that song', 'the article', 'the first result', 'sumber pertama') using provided context.\n"
-        "5. If user is asking a conversational or general knowledge question, type MUST be 'conversation'.\n"
-        "6. CRITICAL PERSONA CONSTRAINT: NEVER output third-person meta-analysis (e.g. NEVER output 'The user is looking for...', 'The user wants...'). If type is 'conversation' or 'clarify', 'response' MUST be what JARVIS directly speaks to the user in Bahasa Indonesia, addressing the user as 'sir'.\n"
-        "7. If type is 'action', response MUST be empty string \"\". Do not output promises or conversational text for actions.\n"
-        "8. Output compact JSON only."
+        "4. For memory operations (e.g. 'ingat bahwa...', 'remember that...', 'siapa nama saya', 'apa makanan favorit saya', 'apa yang kamu ingat tentang saya', 'lupakan...'), set intent='memory', action='store' | 'recall' | 'forget' | 'list', target='<key or query>', parameters={'key': ..., 'value': ...}.\n"
+        "5. Resolve pronouns and references ('it', 'that song', 'the article', 'the first result', 'sumber pertama') using provided context.\n"
+        "6. If user is asking a conversational or general knowledge question, type MUST be 'conversation'. Use provided Stored User Facts to accurately answer questions about the user.\n"
+        "7. CRITICAL PERSONA CONSTRAINT: NEVER output third-person meta-analysis (e.g. NEVER output 'The user is looking for...', 'The user wants...'). If type is 'conversation' or 'clarify', 'response' MUST be what JARVIS directly speaks to the user in Bahasa Indonesia, addressing the user as 'sir'.\n"
+        "8. If type is 'action', response MUST be empty string \"\". Do not output promises or conversational text for actions.\n"
+        "9. Output compact JSON only."
     )
 
 
@@ -157,6 +165,8 @@ def build_interpreter_context_summary(state_context: Optional[Dict[str, Any]]) -
         sources = state_context["last_search_sources"]
         if isinstance(sources, list) and sources:
             parts.append(f"Search Results Available: {len(sources)} sources")
+    if state_context.get("stored_memories"):
+        parts.append(f"Stored User Facts: {state_context['stored_memories']}")
     if state_context.get("active_window"):
         parts.append(f"Active Window: {state_context['active_window']}")
 

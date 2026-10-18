@@ -79,9 +79,14 @@ class MemoryExtractor:
         if not cleaned:
             return []
 
-        # Remove prefix if present, e.g. "/learn", "jarvis pelajari ini:"
+        # Remove prefix if present, e.g. "/learn", "jarvis pelajari ini:", "ingat bahwa"
         cleaned = re.sub(r"^/learn\s*", "", cleaned, flags=re.I).strip()
-        cleaned = re.sub(r"^(?:jarvis\s+)?(?:tolong\s+)?(?:pelajari\s+ini|pelajari\s+tentang\s+aku|pelajari|catat\s+ini|ingat\s+ini)[:,\s]*", "", cleaned, flags=re.I).strip()
+        cleaned = re.sub(
+            r"^(?:jarvis\s+)?(?:tolong\s+)?(?:pelajari\s+ini|pelajari\s+tentang\s+aku|pelajari|catat\s+ini|ingat\s+ini|ingat(?:\s+bahwa)?|remember(?:\s+that)?|catat(?:\s+bahwa)?)[:,\s]*",
+            "",
+            cleaned,
+            flags=re.I,
+        ).strip()
 
         if not cleaned:
             return []
@@ -187,12 +192,32 @@ class MemoryExtractor:
             if val.lower() in ("python", "javascript", "typescript", "rust", "go", "java", "c++", "c#", "php"):
                 items.append(MemoryItem(key="code_language_priority", value=val, category="rule", description=f"Prioritaskan bahasa {val} saat membuat kode", applies_to="prompt"))
 
-        # 6. Fallback generic "ingat bahwa <key> adalah <value>"
+        # 6. Favorite Food & Drink
+        m_food = re.search(r"\b(?:makanan\s+(?:favorit|kesukaan)(?:ku| saya)?|favorite\s+food)\s*(?:adalah|=|:)?\s*([a-z0-9_\s-]+?)(?:,|$|\.|\bdan\b)", lower)
+        if m_food:
+            val = m_food.group(1).strip()
+            items.append(MemoryItem(key="makanan_favorit", value=val, category="preference", description="Makanan favorit", applies_to="prompt"))
+
+        m_drink = re.search(r"\b(?:minuman\s+(?:favorit|kesukaan)(?:ku| saya)?|favorite\s+drink)\s*(?:adalah|=|:)?\s*([a-z0-9_\s-]+?)(?:,|$|\.|\bdan\b)", lower)
+        if m_drink:
+            val = m_drink.group(1).strip()
+            items.append(MemoryItem(key="minuman_favorit", value=val, category="preference", description="Minuman favorit", applies_to="prompt"))
+
+        # 7. Location / City
+        m_loc = re.search(r"\b(?:(?:saya|aku)\s+(?:tinggal\s+di|berada\s+di|domisili\s+di)|lokasi(?:ku| saya)?\s*(?:di|adalah)?)\s*([a-z0-9_\s-]+?)(?:,|$|\.)", lower)
+        if m_loc:
+            val = m_loc.group(1).strip().title()
+            items.append(MemoryItem(key="location", value=val, category="identity", description="Lokasi pengguna", applies_to="prompt"))
+
+        # 8. Fallback generic "ingat bahwa <key> adalah <value>" or "<key> adalah <value>"
         if not items:
-            m_gen = re.search(r"(?:ingat\s+bahwa|remember\s+that)?\s*(.+?)\s+(?:adalah|is|=)\s+(.+)", text, re.I)
+            m_gen = re.search(r"(?:(?:ingat\s+bahwa|remember\s+that|catat\s+bahwa)\s+)?(.+?)\s+(?:adalah|is|=|merupakan)\s+(.+)", text, re.I)
             if m_gen:
                 k = m_gen.group(1).strip().lower().replace(" ", "_")
+                k = re.sub(r"^(?:bahwa|that)\s+", "", k).strip()
                 v = m_gen.group(2).strip().rstrip(".")
-                items.append(MemoryItem(key=k, value=v, category="general", description=f"{k} = {v}", applies_to="general"))
+                if k and v:
+                    items.append(MemoryItem(key=k, value=v, category="general", description=f"{k} = {v}", applies_to="general"))
 
         return items
+

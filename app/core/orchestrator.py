@@ -59,6 +59,8 @@ class Orchestrator:
         self.interpreter = ActionInterpreter(settings=self.settings)
         from app.core.proactive_agent import ProactiveAgent
         self.proactive_agent = ProactiveAgent(settings=self.settings, orchestrator=self)
+        from app.memory.memory import memory_manager
+        self.memory = memory_manager
 
     def is_voice_idle(self) -> bool:
         """Returns True if the assistant is not actively speaking, recording, or processing."""

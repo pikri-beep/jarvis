@@ -55,3 +55,7 @@ class LearnResult:
     @property
     def has_conflicts(self) -> bool:
         return len(self.conflicts) > 0
+
+    @property
+    def learned_items(self) -> List[MemoryItem]:
+        return self.learned

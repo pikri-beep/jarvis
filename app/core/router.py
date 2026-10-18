@@ -877,6 +877,128 @@ class CommandRouter:
                 description=f"Search-First: {q_target}",
             )
 
+        # 1.8. Memory & User Profile Management (Must precede conversational inquiry check so "adalah" / "is" isn't shadowed)
+        # Check Profile / Memory Listing
+        m_profile = re.match(
+            r"^(?:/profile|profil(?:ku| saya)?|who\s+am\s+i|siapa\s+aku|tampilkan\s+profil|kartu\s+profil|"
+            r"apa\s+yang\s+(?:kamu|anda)\s+ingat(?:\s+tentang\s+saya)?|"
+            r"(?:kamu|anda)\s+ingat\s+apa(?:\s+tentang\s+saya)?|"
+            r"apa\s+(?:saja\s+)?ingatan(?:mu| anda| kamu)?(?:\s+tentang\s+saya)?|"
+            r"lihat\s+ingatan|tampilkan\s+ingatan|daftar\s+ingatan|memori(?:ku| saya)?|"
+            r"what\s+do\s+you\s+remember(?:\s+about\s+me)?|"
+            r"show\s+(?:my\s+)?(?:profile|memories)|list\s+memories)$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if m_profile:
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="show_profile",
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description="Show user profile and habits card",
+            )
+
+        # Check Specific Memory Recalls (e.g. "siapa nama saya", "apa nama saya", "panggil saya apa")
+        m_recall_name = re.match(
+            r"^(?:siapa\s+nama\s+(?:saya|aku)|apa\s+nama\s+(?:saya|aku)|nama\s+(?:saya|aku)\s+siapa|who\s+am\s+i|what\s+is\s+my\s+name)$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if m_recall_name:
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="recall_memories",
+                args={"query": "user_name"},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description="Recall user name from memory",
+            )
+
+        m_recall_honorific = re.match(
+            r"^(?:panggil\s+(?:saya|aku)\s+apa|siapa\s+panggilan\s+(?:saya|aku)|panggilan\s+(?:saya|aku)\s+apa|what\s+is\s+my\s+honorific)$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if m_recall_honorific:
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="recall_memories",
+                args={"query": "honorific"},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description="Recall user honorific from memory",
+            )
+
+        # Check Universal Learning Engine: /learn <text>, voice "pelajari ini: <text>", etc.
+        learn_match = re.match(
+            r"^(?:/learn(?:\s+(.+))?|(?:jarvis\s+)?(?:tolong\s+)?pelajari\s+ini(?:\s*:\s*|\s+)(.+)|"
+            r"(?:jarvis\s+)?(?:tolong\s+)?(?:pelajari\s+tentang\s+aku|mari\s+belajar\s+tentang\s+aku|pelajari\s+kebiasaanku)(?:\s*:\s*|\s+)?(.*))$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if learn_match:
+            l_text = learn_match.group(1) or learn_match.group(2) or learn_match.group(3)
+            l_text = (l_text or "").strip()
+            if not l_text:
+                return RouteResult(
+                    route_type=RouteType.FAST_COMMAND,
+                    action="interactive_learn_session",
+                    raw_input=cleaned,
+                    normalized_input=normalized,
+                    description="Start interactive memory learning session",
+                )
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="learn_memory",
+                args={"text": l_text},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description=f"Universal learn memory: {l_text[:40]}",
+            )
+
+        # Check Memory Store (e.g. "ingat bahwa nama saya adalah Alex", "ingat nama saya Alex", "catat bahwa...")
+        mem_store_match = re.match(
+            r"^(?:(?:tolong\s+)?(?:ingat(?:kan)?\s+bahwa|ingat(?:kan)?|remember\s+that|remember|catat\s+bahwa))\s+(.+)$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if mem_store_match:
+            raw_fact = mem_store_match.group(1).strip()
+            m_split = re.split(r"\s+(?:saya\s+adalah|adalah|is|merupakan|=|:)\s+", raw_fact, maxsplit=1)
+            if len(m_split) == 2:
+                k, v = m_split[0].strip(), m_split[1].strip()
+            else:
+                k, v = "", raw_fact
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="store_memory",
+                args={"key": k, "value": v, "raw": raw_fact},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description=f"Fast command: store_memory ({k or 'raw'} = {v})",
+            )
+
+        # Check Memory Forget (e.g. "lupakan nama saya", "forget my car", "lupakan semua", "hapus semua ingatan")
+        mem_forget_match = re.match(
+            r"^(?:(?:tolong\s+)?(?:lupakan|forget|hapus\s+(?:semua\s+)?(?:ingatan|memori)|bersihkan\s+(?:semua\s+)?(?:ingatan|memori)|hapus\s+ingatan))\s*(?:tentang\s+|about\s+)?(.*)$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if mem_forget_match:
+            k = mem_forget_match.group(1).strip()
+            if not k or k.lower() in ("ingatan", "memori", "semua ingatan", "semua memori", "semua", "semuanya", "all"):
+                k = "semua"
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action="forget_memory",
+                args={"key": k},
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description=f"Fast command: forget_memory ({k})",
+            )
+
+
         # Check for conversational inquiry markers (questions, explanations, negations)
         is_conversational_inquiry = any(re.search(pat, lower) for pat in self._CONVERSATIONAL_MARKERS)
 
@@ -927,78 +1049,6 @@ class CommandRouter:
                         normalized_input=normalized,
                         description=f"Fast command: {action}",
                     )
-
-            # Check User Profile View / Management (/profile, siapa aku, apa yang kamu ingat tentang saya)
-            m_profile = re.match(
-                r"^(?:/profile|profil(?:ku| saya)?|who\s+am\s+i|siapa\s+aku|tampilkan\s+profil|kartu\s+profil|apa\s+yang\s+(?:kamu|anda)\s+ingat(?:\s+tentang\s+saya)?|what\s+do\s+you\s+remember(?:\s+about\s+me)?)$",
-                normalized,
-                re.IGNORECASE,
-            )
-            if m_profile:
-                return RouteResult(
-                    route_type=RouteType.FAST_COMMAND,
-                    action="show_profile",
-                    raw_input=cleaned,
-                    normalized_input=normalized,
-                    description="Show user profile and habits card",
-                )
-
-            # Check Universal Learning Engine: /learn <text>, or voice "pelajari ini: <text>", "pelajari tentang aku"
-            learn_match = re.match(
-                r"^(?:/learn(?:\s+(.+))?|(?:jarvis\s+)?(?:tolong\s+)?pelajari\s+ini(?:\s*:\s*|\s+)(.+)|(?:jarvis\s+)?(?:tolong\s+)?(?:pelajari\s+tentang\s+aku|mari\s+belajar\s+tentang\s+aku|pelajari\s+kebiasaanku)(?:\s*:\s*|\s+)?(.*))$",
-                normalized,
-                re.IGNORECASE,
-            )
-            if learn_match:
-                l_text = learn_match.group(1) or learn_match.group(2) or learn_match.group(3)
-                l_text = (l_text or "").strip()
-                if not l_text:
-                    return RouteResult(
-                        route_type=RouteType.FAST_COMMAND,
-                        action="interactive_learn_session",
-                        raw_input=cleaned,
-                        normalized_input=normalized,
-                        description="Start interactive memory learning session",
-                    )
-                return RouteResult(
-                    route_type=RouteType.FAST_COMMAND,
-                    action="learn_memory",
-                    args={"text": l_text},
-                    raw_input=cleaned,
-                    normalized_input=normalized,
-                    description=f"Universal learn memory: {l_text[:40]}",
-                )
-
-            # Check Memory Store (e.g. "ingat bahwa nama saya adalah Alex", "remember that my car is red")
-            mem_store_match = re.match(r"^(?:ingat\s+bahwa|ingat|remember\s+that|remember)\s+(.+)$", normalized)
-            if mem_store_match:
-                raw_fact = mem_store_match.group(1).strip()
-                m_split = re.split(r"\s+(?:saya\s+adalah|adalah|is|merupakan)\s+", raw_fact, maxsplit=1)
-                if len(m_split) == 2:
-                    k, v = m_split[0].strip(), m_split[1].strip()
-                else:
-                    k, v = "fakta", raw_fact
-                return RouteResult(
-                    route_type=RouteType.FAST_COMMAND,
-                    action="store_memory",
-                    args={"key": k, "value": v, "raw": raw_fact},
-                    raw_input=cleaned,
-                    normalized_input=normalized,
-                    description=f"Fast command: store_memory ({k} = {v})",
-                )
-
-            # Check Memory Forget (e.g. "lupakan nama saya", "forget my car")
-            mem_forget_match = re.match(r"^(?:lupakan|forget)\s+(?:tentang\s+|about\s+)?(.+)$", normalized)
-            if mem_forget_match:
-                k = mem_forget_match.group(1).strip()
-                return RouteResult(
-                    route_type=RouteType.FAST_COMMAND,
-                    action="forget_memory",
-                    args={"key": k},
-                    raw_input=cleaned,
-                    normalized_input=normalized,
-                    description=f"Fast command: forget_memory ({k})",
-                )
 
             # Check Contextual Media Play Follow-up (e.g. "yes play it for me", "play it", "putar sekarang", "iya putarkan", "yes play it")
             m_followup_play = re.match(
