@@ -5,6 +5,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -15,6 +16,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -88,17 +90,54 @@ class SettingsTab(QWidget):
 
         # Voice & Speech Controls
         voice_group = QGroupBox("Pengaturan Suara & Audio")
-        voice_layout = QHBoxLayout(voice_group)
+        voice_layout = QGridLayout(voice_group)
+        voice_layout.setVerticalSpacing(8)
+        voice_layout.setHorizontalSpacing(12)
 
-        self.chk_tts = QCheckBox("Aktifkan Keluaran Suara (TTS Piper)")
+        self.chk_tts = QCheckBox("Aktifkan Keluaran Suara (Natural AI Voice)")
         self.chk_tts.setChecked(self.orchestrator.settings.tts_enabled)
         self.chk_tts.stateChanged.connect(self._on_tts_toggled)
-        voice_layout.addWidget(self.chk_tts)
+        voice_layout.addWidget(self.chk_tts, 0, 0, 1, 2)
 
         self.lbl_voice_info = QLabel(f"STT: {self.orchestrator.settings.stt_model} | Wake: 'Hey Jarvis'")
         self.lbl_voice_info.setStyleSheet("color: #71717a; font-size: 12px;")
-        voice_layout.addStretch()
-        voice_layout.addWidget(self.lbl_voice_info)
+        voice_layout.addWidget(self.lbl_voice_info, 0, 2, 1, 2, Qt.AlignmentFlag.AlignRight)
+
+        # Dropdown Model Suara Indonesia
+        lbl_model = QLabel("Karakter Suara Indonesia:")
+        lbl_model.setStyleSheet("color: #a1a1aa; font-size: 12px;")
+        voice_layout.addWidget(lbl_model, 1, 0)
+
+        self.combo_voice = QComboBox()
+        self.combo_voice.addItem("Ardi (Pria - Berwibawa)", "id-ID-ArdiNeural")
+        self.combo_voice.addItem("Gadis (Wanita - Ramah)", "id-ID-GadisNeural")
+        self.combo_voice.addItem("Piper (Offline Lokal)", "piper")
+
+        current_voice = getattr(self.orchestrator.settings, "tts_voice_id", "id-ID-ArdiNeural")
+        idx = self.combo_voice.findData(current_voice)
+        if idx >= 0:
+            self.combo_voice.setCurrentIndex(idx)
+        self.combo_voice.currentIndexChanged.connect(self._on_voice_changed)
+        voice_layout.addWidget(self.combo_voice, 1, 1)
+
+        # Slider Kecepatan Suara
+        lbl_speed = QLabel("Kecepatan Bicara:")
+        lbl_speed.setStyleSheet("color: #a1a1aa; font-size: 12px;")
+        voice_layout.addWidget(lbl_speed, 1, 2)
+
+        speed_box = QHBoxLayout()
+        self.slider_speed = QSlider(Qt.Orientation.Horizontal)
+        self.slider_speed.setRange(80, 150)
+        curr_rate = int(getattr(self.orchestrator.settings, "tts_rate", 1.0) * 100)
+        self.slider_speed.setValue(max(80, min(150, curr_rate)))
+
+        self.lbl_speed_val = QLabel(f"{curr_rate / 100.0:.2f}x")
+        self.lbl_speed_val.setStyleSheet("color: #e4e4e7; font-weight: 600; min-width: 40px;")
+
+        self.slider_speed.valueChanged.connect(self._on_speed_changed)
+        speed_box.addWidget(self.slider_speed)
+        speed_box.addWidget(self.lbl_speed_val)
+        voice_layout.addLayout(speed_box, 1, 3)
 
         layout.addWidget(voice_group)
 
@@ -186,8 +225,21 @@ class SettingsTab(QWidget):
 
     def _on_tts_toggled(self, state: int) -> None:
         enabled = state == Qt.CheckState.Checked.value
-        self.orchestrator.settings.tts_enabled = enabled
+        object.__setattr__(self.orchestrator.settings, "tts_enabled", enabled)
         self.orchestrator.get_tts().enabled = enabled
+
+    def _on_voice_changed(self, index: int) -> None:
+        voice_id = self.combo_voice.currentData()
+        object.__setattr__(self.orchestrator.settings, "tts_voice_id", voice_id)
+        if voice_id == "piper":
+            object.__setattr__(self.orchestrator.settings, "tts_engine", "piper")
+        else:
+            object.__setattr__(self.orchestrator.settings, "tts_engine", "hybrid")
+
+    def _on_speed_changed(self, value: int) -> None:
+        rate = value / 100.0
+        self.lbl_speed_val.setText(f"{rate:.2f}x")
+        object.__setattr__(self.orchestrator.settings, "tts_rate", rate)
 
     def _load_log_file(self) -> None:
         log_path = Path(__file__).resolve().parent.parent.parent.parent / "logs" / "jarvis.log"

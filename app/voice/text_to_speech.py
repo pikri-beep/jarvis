@@ -4,6 +4,10 @@ Provides offline, low-latency, sentence-buffered streaming speech synthesis
 outputting to the default Windows audio device without blocking the application.
 """
 
+import asyncio
+import concurrent.futures
+import hashlib
+import io
 import os
 import queue
 import re
@@ -12,6 +16,13 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, Generator, List, Optional, Tuple, Union
 import numpy as np
+
+try:
+    import av
+    import edge_tts
+    _HAS_EDGE_TTS = True
+except ImportError:
+    _HAS_EDGE_TTS = False
 
 from app.core.config import Settings, get_settings
 from app.core.logger import setup_logger
@@ -475,8 +486,85 @@ class AudioPlaybackQueue:
         return self._is_playing.is_set() or not self._queue.empty()
 
 
+def _run_async_safe(coro, timeout: float = 6.0):
+    """Executes an async coroutine safely from synchronous or worker threads with a timeout."""
+    async def _wrapped():
+        return await asyncio.wait_for(coro, timeout=timeout)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, _wrapped()).result()
+    else:
+        return asyncio.run(_wrapped())
+
+
+def _decode_mp3_to_int16(mp3_bytes: bytes, target_sample_rate: int = 24000) -> Optional[np.ndarray]:
+    """Decodes MP3 byte stream into a normalized mono int16 NumPy audio array using PyAV."""
+    if not mp3_bytes or not _HAS_EDGE_TTS:
+        return None
+    try:
+        container = av.open(io.BytesIO(mp3_bytes))
+        stream = container.streams.audio[0]
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=target_sample_rate)
+        samples = []
+        for frame in container.decode(stream):
+            for resampled_frame in resampler.resample(frame):
+                samples.append(resampled_frame.to_ndarray())
+        if not samples:
+            return None
+        audio = np.concatenate(samples, axis=1).squeeze()
+        peak = float(np.max(np.abs(audio)))
+        if peak > 28000:
+            audio = (audio * (28000.0 / peak)).astype(np.int16)
+        return audio
+    except Exception as e:
+        logger.warning("Failed to decode MP3 stream via PyAV: %s", e)
+        return None
+
+
+class SmartTTSCache:
+    """Persistent on-disk cache for pre-synthesized short responses and fast commands."""
+
+    def __init__(self, cache_dir: Union[Path, str]):
+        self.cache_dir = Path(cache_dir)
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning("Could not create TTS cache dir %s: %s", self.cache_dir, e)
+
+    def _get_hash(self, voice: str, modifier: str, text: str) -> str:
+        key = f"{voice}::{modifier}::{text.strip().lower()}"
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+    def get(self, voice: str, modifier: str, text: str) -> Optional[np.ndarray]:
+        h = self._get_hash(voice, modifier, text)
+        cache_file = self.cache_dir / f"{h}.npy"
+        if cache_file.exists():
+            try:
+                data = np.load(str(cache_file))
+                return data
+            except Exception as e:
+                logger.debug("Failed to read TTS cache %s: %s", cache_file, e)
+        return None
+
+    def set(self, voice: str, modifier: str, text: str, audio: np.ndarray) -> None:
+        if audio is None or len(audio) == 0:
+            return
+        h = self._get_hash(voice, modifier, text)
+        cache_file = self.cache_dir / f"{h}.npy"
+        try:
+            np.save(str(cache_file), audio)
+        except Exception as e:
+            logger.debug("Failed to write TTS cache %s: %s", cache_file, e)
+
+
 class TextToSpeech:
-    """Local Text-to-Speech synthesis engine using Piper with sentence streaming."""
+    """Local & Natural Text-to-Speech synthesis engine using Edge-TTS with Piper offline fallback."""
 
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or get_settings()
@@ -485,6 +573,15 @@ class TextToSpeech:
         self.playback_queue = AudioPlaybackQueue()
         self._voices: Dict[str, Any] = {}
         self._lock = threading.Lock()
+
+        # Smart TTS Cache
+        self.cache_enabled = getattr(self.settings, "tts_cache_enabled", True)
+        cache_dir = getattr(
+            self.settings,
+            "tts_cache_dir",
+            self.settings.project_root / "data" / "cache" / "tts_cache",
+        )
+        self.cache = SmartTTSCache(cache_dir) if self.cache_enabled else None
 
     def _get_model_path(self, language: str = "en") -> Tuple[Path, Path]:
         """Resolves local model and json config paths for given language."""
@@ -556,30 +653,8 @@ class TextToSpeech:
         lang_key = "id" if language.lower().startswith("id") else "en"
         return lang_key in self._voices and self._voices[lang_key] is not None
 
-    def synthesize(self, text: str, language: str = "auto") -> Tuple[Optional[np.ndarray], int]:
-        """Synthesizes text into a NumPy int16 audio array and sample rate.
-
-        Args:
-            text: Text to synthesize.
-            language: Target language ('auto', 'en', or 'id').
-
-        Returns:
-            Tuple of (audio_int16_array, sample_rate). Returns (None, 0) if text is empty/silent.
-        """
-        if language == "auto" or not language:
-            target_lang = detect_language(text)
-        else:
-            target_lang = language
-
-        cleaned = clean_text_for_speech(text, language=target_lang)
-        if not cleaned:
-            return None, 0
-
-        # Don't synthesize pure punctuation
-        if not re.search(r"\w", cleaned):
-            return None, 0
-
-        lang_key = "id" if target_lang.lower().startswith("id") else "en"
+    def _synthesize_piper(self, cleaned: str, lang_key: str) -> Tuple[Optional[np.ndarray], int]:
+        """Synthesizes text using local Piper ONNX model."""
         if not self.is_loaded(lang_key):
             success = self.load_model(lang_key)
             if not success:
@@ -608,8 +683,102 @@ class TextToSpeech:
 
             return audio_data, sample_rate
         except Exception as e:
-            logger.error("Synthesis error for '%s': %s", cleaned[:30], e)
+            logger.error("Piper synthesis error for '%s': %s", cleaned[:30], e)
             return None, sample_rate
+
+    def _synthesize_edge_tts(
+        self,
+        cleaned: str,
+        voice: Optional[str] = None,
+        rate_val: Optional[float] = None,
+        pitch_str: Optional[str] = None,
+    ) -> Optional[np.ndarray]:
+        """Synthesizes text via Microsoft Edge-TTS and decodes to int16 NumPy array."""
+        if not _HAS_EDGE_TTS:
+            return None
+
+        voice_name = voice or getattr(self.settings, "tts_voice_id", "id-ID-ArdiNeural")
+        rate = rate_val if rate_val is not None else getattr(self.settings, "tts_rate", 1.0)
+        pitch = pitch_str or getattr(self.settings, "tts_pitch", "+0Hz")
+
+        rate_pct = int(round((rate - 1.0) * 100))
+        rate_formatted = f"{rate_pct:+d}%"
+
+        async def _fetch() -> bytes:
+            comm = edge_tts.Communicate(cleaned, voice=voice_name, rate=rate_formatted, pitch=pitch)
+            mp3_bytes = b""
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    mp3_bytes += chunk["data"]
+            return mp3_bytes
+
+        try:
+            mp3_data = _run_async_safe(_fetch(), timeout=6.0)
+            if not mp3_data:
+                return None
+
+            return _decode_mp3_to_int16(mp3_data, target_sample_rate=24000)
+        except Exception as e:
+            logger.warning("Edge-TTS synthesis error (%s): %s", voice_name, e)
+            return None
+
+    def synthesize(self, text: str, language: str = "auto") -> Tuple[Optional[np.ndarray], int]:
+        """Synthesizes text into a NumPy int16 audio array and sample rate.
+
+        Supports Natural Edge-TTS for Indonesian with automatic offline fallback to Piper,
+        and Piper British English for authentic Jarvis persona.
+
+        Args:
+            text: Text to synthesize.
+            language: Target language ('auto', 'en', or 'id').
+
+        Returns:
+            Tuple of (audio_int16_array, sample_rate). Returns (None, 0) if text is empty/silent.
+        """
+        if language == "auto" or not language:
+            target_lang = detect_language(text)
+        else:
+            target_lang = language
+
+        cleaned = clean_text_for_speech(text, language=target_lang)
+        if not cleaned:
+            return None, 0
+
+        # Don't synthesize pure punctuation
+        if not re.search(r"\w", cleaned):
+            return None, 0
+
+        engine = getattr(self.settings, "tts_engine", "hybrid").lower()
+        voice_id = getattr(self.settings, "tts_voice_id", "id-ID-ArdiNeural")
+        rate = getattr(self.settings, "tts_rate", 1.0)
+        pitch = getattr(self.settings, "tts_pitch", "+0Hz")
+
+        # 1. Indonesian using Hybrid or Edge-TTS
+        if target_lang.lower().startswith("id") and engine in ("hybrid", "edge") and voice_id != "piper":
+            modifier = f"{rate}_{pitch}"
+            # Check smart audio cache
+            if self.cache:
+                cached = self.cache.get(voice_id, modifier, cleaned)
+                if cached is not None and len(cached) > 0:
+                    return cached, 24000
+
+            # Synthesize via Edge-TTS
+            audio = self._synthesize_edge_tts(cleaned, voice=voice_id, rate_val=rate, pitch_str=pitch)
+            if audio is not None and len(audio) > 0:
+                if self.cache:
+                    self.cache.set(voice_id, modifier, cleaned, audio)
+                return audio, 24000
+
+            # Fallback to Piper if hybrid
+            if engine == "hybrid":
+                logger.info("Edge-TTS unavailable, falling back to local Piper TTS for Indonesian...")
+                return self._synthesize_piper(cleaned, "id")
+            else:
+                return None, 0
+
+        # 2. English or Pure Piper engine
+        lang_key = "id" if target_lang.lower().startswith("id") else "en"
+        return self._synthesize_piper(cleaned, lang_key)
 
     def speak(self, text: str, blocking: bool = False, language: str = "auto") -> float:
         """Synthesizes and speaks text out loud through the default audio output.
@@ -689,6 +858,7 @@ class TextToSpeech:
                     if ttfa is None:
                         ttfa = time.time() - t_start
                     self.playback_queue.enqueue(audio, sr)
+                    total_speech_s += len(audio) / sr
 
         # Flush any trailing sentence fragment
         if self.enabled:
@@ -703,8 +873,7 @@ class TextToSpeech:
                     if ttfa is None:
                         ttfa = time.time() - t_start
                     self.playback_queue.enqueue(audio, sr)
-
-        total_speech_s = total_audio_samples / sample_rate if sample_rate else 0.0
+                    total_speech_s += len(audio) / sr
 
         return {
             "ttfa": ttfa if ttfa is not None else 0.0,

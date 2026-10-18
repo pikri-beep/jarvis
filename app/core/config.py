@@ -123,6 +123,21 @@ class Settings:
     tts_rate: float = field(
         default_factory=lambda: _get_float("JARVIS_TTS_RATE", 1.0)
     )
+    tts_engine: str = field(
+        default_factory=lambda: os.getenv("JARVIS_TTS_ENGINE", "hybrid")
+    )
+    tts_voice_id: str = field(
+        default_factory=lambda: os.getenv("JARVIS_TTS_VOICE_ID", "id-ID-ArdiNeural")
+    )
+    tts_pitch: str = field(
+        default_factory=lambda: os.getenv("JARVIS_TTS_PITCH", "+0Hz")
+    )
+    tts_cache_enabled: bool = field(
+        default_factory=lambda: _get_bool("JARVIS_TTS_CACHE_ENABLED", True)
+    )
+    tts_cache_dir: Path = field(
+        default_factory=lambda: _PROJECT_ROOT / "data" / "cache" / "tts_cache"
+    )
 
     # Wake Word (Phase 4) Settings
     wake_word_enabled: bool = field(

@@ -103,7 +103,7 @@ def test_tts_disabled():
 
 
 def test_tts_mocked_synthesis_and_auto_language():
-    tts = TextToSpeech()
+    tts = TextToSpeech(settings=Settings(tts_engine="piper"))
     
     mock_voice_en = MagicMock()
     mock_voice_en.config.sample_rate = 22050
