@@ -203,12 +203,22 @@ class JarvisMainWindow(QMainWindow):
         h_layout.addWidget(btn_profile)
 
         # Vision / Smart Presence & Gesture Camera Button
-        self.btn_vision = QPushButton("📷 KAMERA: OFF")
+        is_cam_active = (
+            hasattr(self.orchestrator, "vision")
+            and self.orchestrator.vision is not None
+            and self.orchestrator.vision.is_running()
+        )
+        self.btn_vision = QPushButton("📷 KAMERA: ON" if is_cam_active else "📷 KAMERA: OFF")
         self.btn_vision.setObjectName("HeaderPillButton")
         self.btn_vision.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_vision.setToolTip("Aktifkan pemantau kehadiran wajah & gestur musik webcam")
+        self.btn_vision.setToolTip("Aktifkan/matikan pemantau kehadiran wajah & gestur musik webcam")
+        if is_cam_active:
+            self.btn_vision.setStyleSheet(
+                "background-color: #064e3b; color: #34d399; border: 1px solid #10b981; font-weight: 700;"
+            )
         self.btn_vision.clicked.connect(self._toggle_vision)
         h_layout.addWidget(self.btn_vision)
+
 
         # Minimize to Tray Button
         btn_tray = QPushButton("_ Tray")

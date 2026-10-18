@@ -71,8 +71,10 @@ class Orchestrator:
                     on_gesture_event=self._on_vision_gesture,
                 )
                 self.vision.set_media_active_provider(self._is_media_active_for_vision)
+                self.vision.start()
             except Exception as e:
                 logger.warning("Could not initialize VisionManager: %s", e)
+
 
     def _is_media_active_for_vision(self) -> bool:
         """Determines if media playback is active for gesture control."""
