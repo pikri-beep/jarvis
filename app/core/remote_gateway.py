@@ -139,6 +139,21 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                     "sample_rate": sr,
                     "elapsed_ms": round(elapsed * 1000, 1),
                 })
+
+                # Bidirectional Live Sync to Laptop Screen & Speaker
+                sync_cb = getattr(self.server, "on_sync_callback", None)
+                if sync_cb:
+                    try:
+                        sync_cb(user_text, full_reply, audio_target)
+                    except Exception as sync_exc:
+                        logger.warning("[GATEWAY-IPC] Live sync callback error: %s", sync_exc)
+                elif audio_target == "laptop" and full_reply:
+                    try:
+                        tts = orch.get_tts()
+                        if tts and getattr(tts, "enabled", True):
+                            threading.Thread(target=tts.speak, args=(full_reply,), kwargs={"blocking": False}, daemon=True).start()
+                    except Exception as tts_exc:
+                        logger.warning("[GATEWAY-IPC] Laptop fallback TTS error: %s", tts_exc)
             except Exception as exc:
                 logger.error("[GATEWAY-IPC] Process error: %s", exc, exc_info=True)
                 self._send_json(500, {"error": str(exc)})
@@ -190,16 +205,29 @@ def is_gateway_running(port: int = GATEWAY_PORT) -> bool:
         return False
 
 
-def start_remote_gateway(orchestrator: Any, port: int = GATEWAY_PORT) -> bool:
+def set_remote_gateway_sync_callback(callback: Any) -> None:
+    """Sets or updates the live sync callback on the active gateway server."""
+    global _SERVER_INSTANCE
+    if _SERVER_INSTANCE:
+        _SERVER_INSTANCE.on_sync_callback = callback
+
+
+def start_remote_gateway(orchestrator: Any, port: int = GATEWAY_PORT, on_sync_callback: Optional[Any] = None) -> bool:
     """Starts the background IPC gateway server if not already running."""
     global _SERVER_INSTANCE, _SERVER_THREAD
 
     if is_gateway_running(port):
+        if _SERVER_INSTANCE:
+            _SERVER_INSTANCE.orchestrator = orchestrator
+            if on_sync_callback:
+                _SERVER_INSTANCE.on_sync_callback = on_sync_callback
         logger.info("Remote gateway is already running on port %d", port)
         return True
 
     try:
         _SERVER_INSTANCE = ThreadingGatewayServer(("127.0.0.1", port), GatewayRequestHandler, orchestrator)
+        if on_sync_callback:
+            _SERVER_INSTANCE.on_sync_callback = on_sync_callback
         _SERVER_THREAD = threading.Thread(target=_SERVER_INSTANCE.serve_forever, daemon=True, name="JarvisRemoteGateway")
         _SERVER_THREAD.start()
         logger.info("JARVIS Remote IPC Gateway started on http://127.0.0.1:%d", port)

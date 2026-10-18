@@ -50,6 +50,7 @@ class JarvisMainWindow(QMainWindow):
     wake_detected_signal = pyqtSignal(float)
     wake_command_signal = pyqtSignal(str)
     wake_timeout_signal = pyqtSignal()
+    remote_sync_signal = pyqtSignal(str, str, str)  # (user_text, assistant_reply, audio_target)
 
     def __init__(self, orchestrator: Optional[Orchestrator] = None):
         super().__init__()
@@ -80,6 +81,7 @@ class JarvisMainWindow(QMainWindow):
         self.wake_detected_signal.connect(self._on_wake_detected)
         self.wake_command_signal.connect(self._on_wake_command_received)
         self.wake_timeout_signal.connect(self._on_wake_timeout)
+        self.remote_sync_signal.connect(self._on_remote_sync)
 
         # Compatibility widgets (required by existing test suite and legacy abstractions)
         self.chat_canvas = ChatCanvas(self)
@@ -90,7 +92,10 @@ class JarvisMainWindow(QMainWindow):
         # Start background Remote IPC Gateway for PocketDesk Remote mobile connection
         try:
             from app.core.remote_gateway import start_remote_gateway
-            start_remote_gateway(self.orchestrator)
+            start_remote_gateway(
+                self.orchestrator,
+                on_sync_callback=lambda u, r, a: self.remote_sync_signal.emit(u, r, a)
+            )
         except Exception as e:
             logger.warning("Could not start remote gateway: %s", e)
 
@@ -448,6 +453,47 @@ class JarvisMainWindow(QMainWindow):
                 self.orchestrator.get_wake_word().resume()
             except Exception as e:
                 logger.debug("Wake resume exception: %s", e)
+
+    def _on_remote_sync(self, user_text: str, reply: str, audio_target: str) -> None:
+        """Synchronizes remote mobile command and response to laptop GUI and speaker."""
+        tag = "📱 [Mobile Remote]"
+        clean_user = user_text.strip()
+        clean_reply = reply.strip()
+
+        # Update Console Tab
+        if hasattr(self, "console_tab") and self.console_tab:
+            self.console_tab.append_user_message(f"{tag} {clean_user}")
+            self.console_tab.start_assistant_message()
+            self.console_tab.append_assistant_token(clean_reply)
+            self.console_tab.end_assistant_message()
+
+        # Update compatibility chat canvas
+        if hasattr(self, "chat_canvas") and self.chat_canvas:
+            self.chat_canvas.add_user_message(f"{tag} {clean_user}")
+            self.chat_canvas.add_assistant_message(clean_reply, "JARVIS")
+
+        # Reload todos if action might have modified tasks
+        if "todo" in clean_reply.lower() or "tugas" in clean_reply.lower():
+            if hasattr(self, "todo_tab") and self.todo_tab:
+                self.todo_tab.reload_todos()
+
+        # Update HUD status
+        self._set_status(f"📱 Remote: {clean_user[:28]}...", color="#00f0ff")
+
+        # If audio_target == "laptop", speak via laptop TTS
+        if audio_target == "laptop" and clean_reply:
+            try:
+                tts = self.orchestrator.get_tts()
+                if tts and getattr(tts, "enabled", True):
+                    import threading
+                    threading.Thread(
+                        target=tts.speak,
+                        args=(clean_reply,),
+                        kwargs={"blocking": False},
+                        daemon=True,
+                    ).start()
+            except Exception as e:
+                logger.warning("Failed speaking remote reply on laptop: %s", e)
 
     def _stop_current_speech_or_generation(self) -> None:
         """Immediately stops TTS speech and cancels active background generation."""
