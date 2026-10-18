@@ -221,10 +221,28 @@ class Settings:
         default_factory=lambda: _get_float("JARVIS_PROACTIVE_COOLDOWN_SECONDS", 60.0)
     )
 
+    # Vision & Webcam Smart Presence / Gesture Settings
+    vision_presence_enabled: bool = field(
+        default_factory=lambda: _get_bool("JARVIS_VISION_PRESENCE_ENABLED", True)
+    )
+    vision_gesture_enabled: bool = field(
+        default_factory=lambda: _get_bool("JARVIS_VISION_GESTURE_ENABLED", True)
+    )
+    vision_autolock_seconds: int = field(
+        default_factory=lambda: int(_get_float("JARVIS_VISION_AUTOLOCK_SECONDS", 90.0))
+    )
+    vision_return_greeting_enabled: bool = field(
+        default_factory=lambda: _get_bool("JARVIS_VISION_RETURN_GREETING_ENABLED", True)
+    )
+    vision_camera_index: int = field(
+        default_factory=lambda: int(_get_float("JARVIS_VISION_CAMERA_INDEX", 0.0))
+    )
+
     # Simulated User Agent (Voice E2E Testing)
     groq_api_key: Optional[str] = field(
         default_factory=lambda: os.getenv("GROQ_API_KEY")
     )
+
 
 
 # Cached singleton instance

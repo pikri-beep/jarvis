@@ -61,6 +61,85 @@ class Orchestrator:
         self.proactive_agent = ProactiveAgent(settings=self.settings, orchestrator=self)
         from app.memory.memory import memory_manager
         self.memory = memory_manager
+        self.vision = None
+        if getattr(self.settings, "vision_presence_enabled", False):
+            try:
+                from app.vision.vision_manager import VisionManager
+                self.vision = VisionManager(
+                    settings=self.settings,
+                    on_presence_event=self._on_vision_presence,
+                    on_gesture_event=self._on_vision_gesture,
+                )
+                self.vision.set_media_active_provider(self._is_media_active_for_vision)
+            except Exception as e:
+                logger.warning("Could not initialize VisionManager: %s", e)
+
+    def _is_media_active_for_vision(self) -> bool:
+        """Determines if media playback is active for gesture control."""
+        target = self.state.get_last_action_target() or ""
+        if any(w in target.lower() for w in ["music", "youtube", "spotify", "media", "song", "lagu"]):
+            return True
+        return False
+
+    def _on_vision_presence(self, event: Any) -> None:
+        """Handles presence state events from VisionManager."""
+        from app.vision.presence_detector import PresenceEventType
+        if event.event_type == PresenceEventType.USER_RETURNED:
+            if getattr(self.settings, "vision_return_greeting_enabled", True):
+                honorific = self.memory.get_honorific() if hasattr(self, "memory") and self.memory else "sir"
+                msg = f"Selamat datang kembali, {honorific}."
+                logger.info("[VISION] Greeting user: %s", msg)
+                if self.tts and getattr(self.settings, "tts_enabled", False):
+                    try:
+                        self.tts.speak(msg)
+                    except Exception as e:
+                        logger.debug("TTS error during vision greeting: %s", e)
+                if hasattr(self, "on_vision_greeting") and callable(self.on_vision_greeting):
+                    try:
+                        self.on_vision_greeting(msg)
+                    except Exception:
+                        pass
+        elif event.event_type == PresenceEventType.USER_ABSENT_WARNING:
+            msg = "Layar akan dikunci otomatis sebentar lagi karena Anda tidak di depan laptop, sir."
+            logger.info("[VISION] Emitting absent warning: %s", msg)
+            if self.tts and getattr(self.settings, "tts_enabled", False):
+                try:
+                    self.tts.speak(msg)
+                except Exception as e:
+                    logger.debug("TTS error during absent warning: %s", e)
+        elif event.event_type == PresenceEventType.USER_ABSENT_TIMEOUT:
+            logger.info("[VISION] Executing auto-lock Windows due to 90s presence timeout")
+            from app.tools.windows import lock_windows
+            lock_windows()
+
+    def _on_vision_gesture(self, event: Any) -> None:
+        """Handles hand gesture media events from VisionManager."""
+        from app.vision.gesture_detector import GestureType
+        logger.info("[VISION] Hand gesture triggered: %s (%s)", event.gesture, event.label)
+
+        if event.gesture == GestureType.OPEN_PALM:
+            from app.tools.music import media_play_pause
+            media_play_pause()
+            self.state.set_last_action("play_pause_gesture", "active_media", "GestureControl", True)
+        elif event.gesture == GestureType.SWIPE_RIGHT:
+            from app.tools.music import media_next
+            media_next()
+            self.state.set_last_action("next_track_gesture", "active_media", "GestureControl", True)
+        elif event.gesture == GestureType.SWIPE_LEFT:
+            from app.tools.music import media_previous
+            media_previous()
+            self.state.set_last_action("prev_track_gesture", "active_media", "GestureControl", True)
+        elif event.gesture == GestureType.POINT_UP:
+            from app.tools.music import change_volume
+            change_volume("mute")
+            self.state.set_last_action("mute_gesture", "volume", "GestureControl", True)
+
+        if hasattr(self, "on_gesture_detected") and callable(self.on_gesture_detected):
+            try:
+                self.on_gesture_detected(event.label)
+            except Exception:
+                pass
+
 
     def is_voice_idle(self) -> bool:
         """Returns True if the assistant is not actively speaking, recording, or processing."""

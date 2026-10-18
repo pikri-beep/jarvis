@@ -614,6 +614,41 @@ def handle_fast_command(
             reply_chunks.append(msg)
             yield msg
 
+        elif route.action == "enable_vision":
+            from app.vision import get_vision_manager
+            vm = getattr(orchestrator, "vision", None) or get_vision_manager()
+            ok = vm.start()
+            msg = "Pemantau kamera dan gestur pintar telah diaktifkan, sir." if is_id else "Smart camera presence and gesture control enabled, sir."
+            orchestrator.state.set_last_action("enable_vision", "camera", "Vision", ok)
+            logger.info('[TOOL] name="enable_vision" status="%s"', "SUCCESS" if ok else "FAILURE")
+            reply_chunks.append(msg)
+            yield msg
+
+        elif route.action == "disable_vision":
+            from app.vision import get_vision_manager
+            vm = getattr(orchestrator, "vision", None) or get_vision_manager()
+            vm.stop()
+            msg = "Pemantau kamera telah dinonaktifkan dan perangkat kamera dilepas, sir." if is_id else "Camera monitoring disabled and hardware released, sir."
+            orchestrator.state.set_last_action("disable_vision", "camera", "Vision", True)
+            logger.info('[TOOL] name="disable_vision" status="SUCCESS"')
+            reply_chunks.append(msg)
+            yield msg
+
+        elif route.action == "vision_status":
+            from app.vision import get_vision_manager
+            vm = getattr(orchestrator, "vision", None) or get_vision_manager()
+            active = vm.is_running()
+            if is_id:
+                state_s = "aktif memantau kehadiran dan gestur" if active else "nonaktif (kamera mati)"
+                msg = f"Status kamera pemantau saat ini {state_s}, sir."
+            else:
+                state_s = "active" if active else "disabled"
+                msg = f"Vision camera is currently {state_s}, sir."
+            orchestrator.state.set_last_action("vision_status", "camera", "Vision", True)
+            reply_chunks.append(msg)
+            yield msg
+
+
         elif route.action == "focus_app":
             from app.tools.desktop import focus_application
             app_t = route.args.get("target", "") or target

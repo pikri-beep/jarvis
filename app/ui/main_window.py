@@ -202,6 +202,14 @@ class JarvisMainWindow(QMainWindow):
         btn_profile.clicked.connect(self._show_profile_dialog)
         h_layout.addWidget(btn_profile)
 
+        # Vision / Smart Presence & Gesture Camera Button
+        self.btn_vision = QPushButton("📷 KAMERA: OFF")
+        self.btn_vision.setObjectName("HeaderPillButton")
+        self.btn_vision.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_vision.setToolTip("Aktifkan pemantau kehadiran wajah & gestur musik webcam")
+        self.btn_vision.clicked.connect(self._toggle_vision)
+        h_layout.addWidget(self.btn_vision)
+
         # Minimize to Tray Button
         btn_tray = QPushButton("_ Tray")
         btn_tray.setObjectName("HeaderPillButton")
@@ -626,6 +634,26 @@ class JarvisMainWindow(QMainWindow):
 
     def _on_wake_command_received(self, text: str) -> None:
         self._submit_prompt(text)
+
+    # --- Vision & Camera Toggle ---
+    def _toggle_vision(self) -> None:
+        try:
+            from app.vision import get_vision_manager
+            vm = getattr(self.orchestrator, "vision", None) or get_vision_manager()
+            is_active = vm.toggle()
+            if is_active:
+                self.btn_vision.setText("📷 KAMERA: ON")
+                self.btn_vision.setStyleSheet(
+                    "background-color: #064e3b; color: #34d399; border: 1px solid #10b981; font-weight: 700;"
+                )
+                self._set_status("📷 Kamera Aktif (Kehadiran & Gestur)", color="#34d399")
+            else:
+                self.btn_vision.setText("📷 KAMERA: OFF")
+                self.btn_vision.setStyleSheet("")
+                self._set_status("📷 Kamera Dinonaktifkan", color="#94a3b8")
+        except Exception as e:
+            logger.error("Failed to toggle vision: %s", e)
+            self._set_status("⚠️ Error Kamera", color="#ef4444")
 
     # --- Profile & Memory Dialog ---
     def _show_profile_dialog(self) -> None:

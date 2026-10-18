@@ -997,7 +997,32 @@ class CommandRouter:
                 normalized_input=normalized,
                 description=f"Fast command: forget_memory ({k})",
             )
-
+        # Check Camera / Vision Smart Presence & Gesture Controls
+        m_cam = re.match(
+            r"^(?:(?:tolong\s+)?(?:(aktifkan|nyalakan|hidupkan|turn\s+on|enable)|(matikan|nonaktifkan|turn\s+off|disable))\s+(?:pemantau\s+)?(?:kamera|webcam|vision)|"
+            r"(?:status\s+(?:kamera|webcam|vision)|cek\s+(?:kamera|webcam|vision)|vision\s+status|camera\s+status))$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if m_cam:
+            is_on = bool(m_cam.group(1))
+            is_off = bool(m_cam.group(2))
+            if is_on:
+                act = "enable_vision"
+                desc = "Fast command: enable_vision"
+            elif is_off:
+                act = "disable_vision"
+                desc = "Fast command: disable_vision"
+            else:
+                act = "vision_status"
+                desc = "Fast command: vision_status"
+            return RouteResult(
+                route_type=RouteType.FAST_COMMAND,
+                action=act,
+                raw_input=cleaned,
+                normalized_input=normalized,
+                description=desc,
+            )
 
         # Check for conversational inquiry markers (questions, explanations, negations)
         is_conversational_inquiry = any(re.search(pat, lower) for pat in self._CONVERSATIONAL_MARKERS)
