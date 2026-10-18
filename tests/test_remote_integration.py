@@ -167,8 +167,8 @@ class TestRemoteGatewayIPC:
         mock_orch.get_tts.return_value = mock_tts
 
         test_port = 8799
-        mock_sync_cb = MagicMock()
-        started = start_remote_gateway(mock_orch, port=test_port, on_sync_callback=mock_sync_cb)
+        mock_sync = MagicMock()
+        started = start_remote_gateway(mock_orch, port=test_port, on_sync_callback=mock_sync)
         assert started is True
         assert is_gateway_running(test_port) is True
 
@@ -195,7 +195,7 @@ class TestRemoteGatewayIPC:
                 assert data["success"] is True
                 assert "Halo sir" in data["reply"]
                 assert data["audio_base64"] == ""  # Not requested for laptop
-                mock_sync_cb.assert_called_with("halo jarvis", "Halo sir, ada yang bisa saya bantu?", "laptop")
+                mock_sync.assert_called_with("halo jarvis", "Halo sir, ada yang bisa saya bantu?", "laptop")
 
             # 3. Test POST /api/process (Phone audio target -> synthesizes WAV)
             proc_phone_payload = json.dumps({"text": "halo jarvis", "audio_target": "phone"}).encode("utf-8")
@@ -209,7 +209,7 @@ class TestRemoteGatewayIPC:
                 data = json.loads(resp.read().decode("utf-8"))
                 assert data["success"] is True
                 assert len(data["audio_base64"]) > 0
-                mock_sync_cb.assert_called_with("halo jarvis", "Halo sir, ada yang bisa saya bantu?", "phone")
+                mock_sync.assert_called_with("halo jarvis", "Halo sir, ada yang bisa saya bantu?", "phone")
 
             # 4. Test POST /api/transcribe
             import scipy.io.wavfile

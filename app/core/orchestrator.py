@@ -148,6 +148,12 @@ class Orchestrator:
             )
         return text, info
 
+    def process_command(
+        self, user_input: str
+    ) -> Tuple[RouteResult, Generator[str, None, None]]:
+        """Processes user command string. Alias for process_input_stream for external IPC callers."""
+        return self.process_input_stream(user_input)
+
     def process_input_stream(
         self, user_input: str
     ) -> Tuple[RouteResult, Generator[str, None, None]]:
